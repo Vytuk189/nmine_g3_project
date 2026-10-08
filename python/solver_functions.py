@@ -1,0 +1,262 @@
+"""Shared thermodynamics, reconstruction, flux and residual calculations."""
+
+import numpy as np
+
+
+def sg_eos(request, k=None, e=None, rho=None, p=None, temperature=None, q=None):
+    """
+    Get a thermodynamic property using the stiffened-gas EOS.
+
+    Phase: k=1 for gas, k=2 for liquid.
+    All inputs must use SI units.
+
+    Checks thermodynamic conditions:
+        rho > 0, p + p_inf > 0, temperature > 0.
+    """
+
+    # gamma, p_inf [Pa], q [J/kg], Cv [J/(kg K)]
+    parameters = {1: (1.4, 0, 0, 718),
+                  2: (2.35, 1e9, -1.167e6, 1816)}
+
+    if request == "p_common":
+        m1, m2, momentum, energy, alpha1 = q
+        alpha2 = 1 - alpha1
+
+        if not np.all(np.isfinite(q)): raise ValueError("Q contains a non-finite value.")
+        if m1 <= 0 or m2 <= 0: raise ValueError("Partial masses must be positive.")
+        if alpha1 <= 0 or alpha1 >= 1: raise ValueError("Volume fraction must satisfy 0 < alpha1 < 1.")
+
+        gamma1, p_inf1, q1, c_v1 = parameters[1]
+        gamma2, p_inf2, q2, c_v2 = parameters[2]
+
+        rho = m1 + m2
+        u = momentum / rho
+        rho_e = energy - 0.5*rho*u**2
+
+        numerator = (rho_e - m1*q1 - m2*q2 - alpha1*gamma1*p_inf1 / (gamma1 - 1) - alpha2*gamma2*p_inf2 / (gamma2 - 1))
+        denominator = (alpha1 / (gamma1 - 1) + alpha2 / (gamma2 - 1))
+        p = numerator / denominator
+
+        # check density, shifted pressure and temperature for each phase
+        rho1 = m1 / alpha1
+        rho2 = m2 / alpha2
+
+        sg_eos("T_prho", k=1, p=p, rho=rho1)
+        sg_eos("T_prho", k=2, p=p, rho=rho2)
+
+        return p
+
+    gamma, p_inf, q, c_v = parameters[k]
+
+    if request == "rho_pT":
+        # check inputs before dividing by temperature
+        if not np.isfinite(temperature) or temperature <= 0: raise ValueError(f"Phase {k}: temperature must be positive.")
+        if not np.isfinite(p) or p + p_inf <= 0: raise ValueError(f"Phase {k}: p + p_inf must be positive.")
+
+        rho = (p + p_inf) / ((gamma - 1)*c_v*temperature)
+
+    elif request == "p_erho":
+        # Check density before recovering pressure and temperature
+        if not np.isfinite(rho) or rho <= 0: raise ValueError(f"Phase {k}: density must be positive.")
+        p = (gamma - 1)*rho*(e - q) - gamma*p_inf
+
+    elif request not in ("e_prho", "T_prho", "h_prho", "c_prho"): raise ValueError("Unknown request.")
+
+    # Check the resulting thermodynamic state
+    if not np.isfinite(rho) or rho <= 0: raise ValueError(f"Phase {k}: density must be positive.")
+    if not np.isfinite(p) or p + p_inf <= 0: raise ValueError(f"Phase {k}: p + p_inf must be positive.")
+
+    temperature = (p + p_inf) / ((gamma - 1)*rho*c_v)
+
+    if not np.isfinite(temperature) or temperature <= 0: raise ValueError(f"Phase {k}: temperature must be positive.")
+
+    if request == "p_erho":
+        return p
+
+    elif request == "rho_pT":
+        return rho
+
+    elif request == "e_prho":
+        return q + (p + gamma*p_inf) / ((gamma - 1)*rho)
+
+    elif request == "T_prho":
+        return temperature
+
+    elif request == "h_prho":
+        return q + gamma*(p + p_inf) / ((gamma - 1)*rho)
+
+    elif request == "c_prho":
+        return np.sqrt(gamma*(p + p_inf) / rho)
+
+
+def primitive_to_q(p, u, t_g, t_l, alpha_g):
+    """
+    Convert primitive variables to the conservative vector.
+    Inputs: p [Pa], u [m/s], t_g and t_l [k], alpha_g [-].
+    """
+    alpha_l = 1 - alpha_g
+    # densities and specific internal energies by phase
+    rho_g = sg_eos("rho_pT", k=1, p=p, temperature=t_g)
+    rho_l = sg_eos("rho_pT", k=2, p=p, temperature=t_l)
+    e_g = sg_eos("e_prho", k=1, p=p, rho=rho_g)
+    e_l = sg_eos("e_prho", k=2, p=p, rho=rho_l)
+    # partial masses per unit mixture volume
+    m_g = alpha_g*rho_g
+    m_l = alpha_l*rho_l
+    rho = m_g + m_l
+    momentum = rho*u
+    energy = m_g*e_g + m_l*e_l + 0.5*rho*u**2
+    return np.array([m_g, m_l, momentum, energy, alpha_g])
+
+
+def q_to_primitive(q, eps_alpha=1e-8, eps_m=1e-12):
+    """
+    Recover primitive variables from q.
+    Returns a dictionary. All quantities use SI units.
+    """
+    m_g, m_l, momentum, energy, alpha_g = q
+    # bound volume fractions and partial masses
+    alpha_g = min(1 - eps_alpha, max(eps_alpha, alpha_g))
+    alpha_l = 1 - alpha_g
+    m_g = max(eps_m, m_g)
+    m_l = max(eps_m, m_l)
+    # mixture properties
+    rho = m_g + m_l
+    u = momentum / rho
+    e_total = energy / rho
+    e = e_total - 0.5*u**2
+    # pressure recovery
+    q_bounded = np.array([m_g, m_l, momentum, energy, alpha_g])
+    p = sg_eos("p_common", q=q_bounded)
+    # density by phase
+    rho_g = m_g / alpha_g
+    rho_l = m_l / alpha_l
+    # thermodynamic properties by phase
+    t_g = sg_eos("T_prho", k=1, p=p, rho=rho_g)
+    t_l = sg_eos("T_prho", k=2, p=p, rho=rho_l)
+    e_g = sg_eos("e_prho", k=1, p=p, rho=rho_g)
+    e_l = sg_eos("e_prho", k=2, p=p, rho=rho_l)
+    h_g = sg_eos("h_prho", k=1, p=p, rho=rho_g)
+    h_l = sg_eos("h_prho", k=2, p=p, rho=rho_l)
+    c_g = sg_eos("c_prho", k=1, p=p, rho=rho_g)
+    c_l = sg_eos("c_prho", k=2, p=p, rho=rho_l)
+    # speed of sound
+    c = np.sqrt(1 / (rho*(alpha_g/(rho_g*c_g**2) + alpha_l/(rho_l*c_l**2))))
+    # compressibility coefficient
+    k = alpha_g*alpha_l*(rho_l*c_l**2 - rho_g*c_g**2) / (alpha_l*rho_g*c_g**2 + alpha_g*rho_l*c_l**2)
+
+    primitive = {
+        "p": p, "u": u,
+        "t_g": t_g, "t_l": t_l,
+        "alpha_g": alpha_g, "alpha_l": alpha_l,
+        "rho": rho, "rho_g": rho_g, "rho_l": rho_l,
+        "e": e, "e_total": e_total,
+        "e_g": e_g, "e_l": e_l,
+        "h_g": h_g, "h_l": h_l,
+        "c_g": c_g, "c_l": c_l,
+        "c": c, "k": k
+    }
+
+    return primitive
+
+
+def get_primitives(q, q_to_primitive):
+    """Returns a dictionary of primitive arrays, including ghost cells."""
+    first = q_to_primitive(q[:, 0])
+
+    primitives = {name: np.zeros(q.shape[1]) for name in first}
+
+    for j in range(q.shape[1]):
+        cell = first if j == 0 else q_to_primitive(q[:, j])
+        for name in primitives:
+            primitives[name][j] = cell[name]
+
+    return primitives
+
+
+def minmod(a, b):
+    return np.where(a*b > 0, np.sign(a)*np.minimum(np.abs(a), np.abs(b)), 0)
+
+
+def muscl_reconstruction(q, domain):
+    """Return left/right cell-face states; Q has shape (5, N_total)."""
+    x = domain["x_centres"]
+    faces = domain["x_faces"]
+    sigma = np.zeros_like(q, dtype=float)
+    delta_left = (q[:, 1:-1] - q[:, :-2]) / (x[1:-1] - x[:-2])
+    delta_right = (q[:, 2:] - q[:, 1:-1]) / (x[2:] - x[1:-1])
+    sigma[:, 1:-1] = minmod(delta_left, delta_right)
+    q_left = q - sigma*(x - faces[:-1])
+    q_right = q + sigma*(faces[1:] - x)
+    # Revert to first order if either reconstructed pressure is too low.
+    for j in range(q.shape[1]):
+        try:
+            p_left = q_to_primitive(q_left[:, j])["p"]
+            p_right = q_to_primitive(q_right[:, j])["p"]
+            valid = p_left > 5000 and p_right > 5000
+        except ValueError:
+            valid = False
+    
+        if not valid:
+            q_left[:, j] = q[:, j]
+            q_right[:, j] = q[:, j]
+    
+    return q_left, q_right
+
+
+def rusanov_flux(q_interface_left, q_interface_right, q_to_primitive):
+    """Return the five-component flux and the interface velocity."""
+    primitive_left = q_to_primitive(q_interface_left)
+    primitive_right = q_to_primitive(q_interface_right)
+    u_left, p_left, c_left = primitive_left["u"], primitive_left["p"], primitive_left["c"]
+    u_right, p_right, c_right = primitive_right["u"], primitive_right["p"], primitive_right["c"]
+    flux_left = np.array([q_interface_left[0]*u_left, q_interface_left[1]*u_left, q_interface_left[2]*u_left + p_left, (q_interface_left[3] + p_left)*u_left, q_interface_left[4]*u_left])
+    flux_right = np.array([q_interface_right[0]*u_right, q_interface_right[1]*u_right, q_interface_right[2]*u_right + p_right, (q_interface_right[3] + p_right)*u_right, q_interface_right[4]*u_right])
+    s = max(abs(u_left) + c_left, abs(u_right) + c_right)
+    flux = 0.5*(flux_left + flux_right) - 0.5*s*(q_interface_right - q_interface_left)
+    u_star = 0.5*(u_left + u_right)
+    return flux, u_star
+
+
+def compute_residual(q, domain, q_to_primitive, rusanov_flux):
+    """
+    Compute dQ/dt for physical cells using source-term Option 2.
+
+    Input q: shape (5, n_total), including populated ghost cells.
+    Output rate: shape (5, n_cells), physical cells only.
+    Boundary conditions must be applied before calling this function.
+    A side without a ghost cell is a fixed boundary: fixed_state(side) is used
+    as the outer state of the boundary face.
+    """
+    from conditions import fixed_state
+
+    q = np.asarray(q, dtype=float)
+    if q.shape != (5, domain["n_total"]): raise ValueError("Q must have shape (5, N_total).")
+
+    physical_ind, area, volumes, n_cells = domain["physical_ind"], domain["area_faces"], domain["volumes"], domain["n_cells"]
+    ng_left, ng_right = domain["n_ghost_left"], domain["n_ghost_right"]
+    q_left, q_right = muscl_reconstruction(q, domain)
+
+    first_face = physical_ind[0]
+    flux = np.zeros((5, n_cells + 1))
+    u_star = np.zeros(n_cells + 1)
+    for i in range(n_cells + 1):
+        face = first_face + i
+        q_interface_left = q_right[:, face - 1] if (i > 0 or ng_left > 0) else fixed_state("left")    # right edge of the face on the left
+        q_interface_right = q_left[:, face] if (i < n_cells or ng_right > 0) else fixed_state("right")       # left edge of the face on the right
+        flux[:, i], u_star[i] = rusanov_flux(q_interface_left, q_interface_right, q_to_primitive)
+
+    rate = np.zeros((5, n_cells))
+    for i, j in enumerate(physical_ind):
+        area_left, area_right = area[j], area[j + 1]
+        cell_volume = volumes[j]
+        rate[:, i] = -(area_right*flux[:, i + 1] - area_left*flux[:, i]) / cell_volume
+        primitive = q_to_primitive(q[:, j])
+        p, alpha_g, k = primitive["p"], primitive["alpha_g"], primitive["k"]
+        # momentum source
+        rate[2, i] += p*(area_right - area_left) / cell_volume
+        # volume-fraction source, using interface velocities
+        div_area_u = (area_right*u_star[i + 1] - area_left*u_star[i]) / cell_volume
+        rate[4, i] += (alpha_g + k)*div_area_u
+
+    return rate
