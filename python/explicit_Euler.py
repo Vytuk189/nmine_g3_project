@@ -3,6 +3,7 @@
 import numpy as np
 from conditions import apply_boundary_conditions
 from solver_functions import get_primitives, q_to_primitive, compute_residual, rusanov_flux
+from miscellaneous import conservation_check
 
 
 def get_time_step(u, c, dx, cfl=0.5):
@@ -32,6 +33,7 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
         history["primitives"][name] = [primitives[name].copy()]
 
     while t < final_time:
+        print(f"\rCalculating{'.' * (counter % 3 + 1):<3}", end="", flush=True)
         tau = get_time_step(primitives["u"][physical], primitives["c"][physical], domain["dx"][physical], cfl)
         if not np.isfinite(tau) or tau <= 0 or t + tau == t: raise ValueError("Invalid time step: time cannot advance.")
         remaining = final_time - t
@@ -58,7 +60,7 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
             max_p = np.max(primitives["p"][physical])
             max_speed = np.max(abs(primitives["u"][physical]))
 
-            print(f"Iteration: {counter}, t: {t:.6g} s, tau: {tau:6g}, max p: {max_p:.6g} Pa, max |u|: {max_speed:.6g} m/s")
+            print(f"\rIteration: {counter}, t: {t:.6g} s, tau: {tau:6g}, max p: {max_p:.6g} Pa, max |u|: {max_speed:.6g} m/s")
 
     # Each primitive array has shape (number of saved times, N_total).
     history["times"] = np.array(history["times"])
@@ -66,4 +68,5 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
     for name in history["primitives"]:
         history["primitives"][name] = np.array(history["primitives"][name])
 
+    mass_error, energy_error = conservation_check(q_initial, q_current, domain)
     return q_current, history

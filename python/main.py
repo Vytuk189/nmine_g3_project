@@ -11,8 +11,8 @@ from plotting import plot_domain, simple_plot
 # Workflow settings
 run_simulation = True
 show_domain = True
-folder_name = "task15"
-solver_name = "explicit_euler"
+folder_name = "task14"
+solver_name = "rk4"
 
 # Domain inputs (define new rules in domain_rules.py, then import them above)
 x_bounds = [0, 10]
@@ -28,7 +28,7 @@ save_every = 50
 bc_settings = {"left": "reflective", "right": "reflective"}
 
 # Plot inputs: (primitive identifier(s), requested time [s], optional x limits)
-plot_requests = [("p", 0.001, [2, 8]), (["u", "c"], 0.001, None), (["t_g", "t_l"], 0.0005, None)]
+plot_requests = [("p", 0.001, None), (["u", "c"], 0.001, None), (["t_g", "t_l"], 0.001, None), (["alpha_g", "alpha_l"], 0.001, None), (["rho_g", "rho_l"], 0.001, None)]
 
 
 if run_simulation:
