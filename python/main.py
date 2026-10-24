@@ -14,9 +14,9 @@ from plotting import plot_domain, simple_plot
 # WORKFLOW
 run_simulation = True       # True: compute and save. False: load existing results and plot only.
 show_domain = True         # Show the mesh before computing; close its window to start the solver.
-folder_name = "task14rk4"   # New results: data/folder_name, with _1, _2, ... if it already exists.
-load_folder = "task14rk4"   # Used only when run_simulation=False; a name under data or a folder path.
-solver_name = "rk4"         # Choose "explicit_euler", "rk4" or "implicit_euler".
+folder_name = "task14cn"   # New results: data/folder_name, with _1, _2, ... if it already exists.
+load_folder = "task14cn"   # Used only when run_simulation=False; a name under data or a folder path.
+solver_name = "crank_nicolson"         # Choose "explicit_euler", "rk4" or "implicit_euler".
 
 # DOMAIN (used only for a new simulation)
 x_bounds = [0, 10]          # Left and right domain boundaries [m].
@@ -61,6 +61,16 @@ elif solver_name == "rk4":
     solver_options = {"cfl": cfl, "save_every": save_every}
 
 elif solver_name == "implicit_euler":
+    tau = 1e-5             # Prescribed time step [s]; only the final step may be shortened.
+    eps_tol = 1e-6         # Required relative fixed-point defect in EVERY physical cell.
+    limit = 1000          # Maximum fixed-point iterations for each time step.
+    relax_factor = 0.5    # Fraction of the correction applied per iteration: 0 < value <= 1.
+    save_every = 50
+    # This solver uses relaxed fixed point. A large tau can still prevent convergence.
+    # Time and the inner iteration counter overwrite one line; summaries start new lines.
+    solver_options = {"tau": tau, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "save_every": save_every}
+    
+elif solver_name == "crank_nicolson":
     tau = 1e-5             # Prescribed time step [s]; only the final step may be shortened.
     eps_tol = 1e-6         # Required relative fixed-point defect in EVERY physical cell.
     limit = 1000          # Maximum fixed-point iterations for each time step.
