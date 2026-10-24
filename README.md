@@ -4,7 +4,7 @@ A Python framework for one-dimensional gas–liquid flow with a stiffened-gas eq
 
 The normal user workflow is to **configure `python/main.py`, run a solver, save its results, and plot the saved data**. You can also load existing results in a separate script without running a simulation.
 
-Four time integrators are registered: explicit Euler, classical RK4, backward Euler and Crank–Nicolson. The two implicit methods use relaxed fixed-point iteration. This README describes the implementation currently in this repository; method names do not by themselves establish accuracy or convergence for a particular case.
+Four time integrators are registered: explicit Euler, classical RK4, backward Euler and Crank–Nicolson. The two implicit methods use Newton iteration by default; relaxed fixed-point iteration is selected with `nonlinear_method="fpi"`. This README accompanies the updated solver scripts, including Jacobian reuse and abbreviated progress printing. Apply those scripts together with this README; documentation alone does not add these features to an older checkout.
 
 ## Contents
 
@@ -20,12 +20,12 @@ Four time integrators are registered: explicit Euler, classical RK4, backward Eu
 
 ## Quick start
 
-Install Python, NumPy and Matplotlib. The Python source files are inside the **`python` subdirectory**, not the repository root.
+Install Python, NumPy, SciPy and Matplotlib. The Python source files are inside the **`python` subdirectory**, not the repository root.
 
 ```bash
 git clone https://github.com/Vytuk189/nmine_g3_project.git
 cd nmine_g3_project/python
-python -m pip install numpy matplotlib
+python -m pip install numpy scipy matplotlib
 python main.py
 ```
 
@@ -40,7 +40,7 @@ run_simulation = False
 load_folder = "task14cn"  # The actual saved folder name, including any suffix.
 ```
 
-Then run `python main.py`. The solution plots are produced from disk. In this checked-in version, `show_domain` applies only to new simulations because the domain itself is not loaded from disk.
+Then run `python main.py`. The solution plots are produced from disk. In this workflow, `show_domain` applies only to new simulations because the domain itself is not loaded from disk.
 
 ## Project structure
 
@@ -56,9 +56,9 @@ All paths below are relative to the repository root.
 | [`python/solvers.py`](python/solvers.py) | Dictionary mapping solver names to callable time integrators. |
 | [`python/explicit_Euler.py`](python/explicit_Euler.py) | Explicit Euler integration and its CFL time-step calculation. |
 | [`python/rk4.py`](python/rk4.py) | Four-stage RK4 integration and its CFL time-step calculation. |
-| [`python/implicit_Euler.py`](python/implicit_Euler.py) | Backward Euler time loop with a prescribed time step. |
-| [`python/crank_nicolson.py`](python/crank_nicolson.py) | Crank–Nicolson time loop with a prescribed time step. |
-| [`python/nonlinear_solvers.py`](python/nonlinear_solvers.py) | Relaxed fixed-point solvers for one backward Euler or Crank–Nicolson step. |
+| [`python/implicit_Euler.py`](python/implicit_Euler.py) | Complete backward Euler time loop; selects `newton_euler` or `fixed_point_euler`. |
+| [`python/crank_nicolson.py`](python/crank_nicolson.py) | Complete Crank–Nicolson time loop; selects `newton_CN` or `fixed_point_CN`. |
+| [`python/nonlinear_solvers.py`](python/nonlinear_solvers.py) | Four separate one-step functions: Newton and FPI for both implicit schemes; shared reference-scale and sparse Jacobian helpers. |
 | [`python/data_io.py`](python/data_io.py) | Writes physical-cell primitive histories to text files and reads them back. |
 | [`python/plotting.py`](python/plotting.py) | Mesh plotting and one- or two-axis plots of saved primitive variables. |
 | [`python/miscellaneous.py`](python/miscellaneous.py) | Total mass and total energy comparison between initial and final states. |
@@ -122,14 +122,98 @@ q_final, history = solver(q_initial, domain, final_time, bc_settings, **solver_o
 | --- | --- | --- |
 | `explicit_euler` | `cfl` | `save_every` |
 | `rk4` | `cfl` | `save_every` |
-| `implicit_euler` | Required `tau` [s] | `save_every`, `eps_tol`, `limit`, `relax_factor` |
-| `crank_nicolson` | Required `tau` [s] | `save_every`, `eps_tol`, `limit`, `relax_factor` |
+| `implicit_euler` | Required `tau` [s] | `save_every`, `nonlinear_method`, `eps_tol`, `limit`, `relax_factor`, `eps_j`, `q_reference`, `jacobian_every` |
+| `crank_nicolson` | Required `tau` [s] | `save_every`, `nonlinear_method`, `eps_tol`, `limit`, `relax_factor`, `eps_j`, `q_reference`, `jacobian_every` |
 
 Explicit methods recalculate `tau = cfl * min(dx / (abs(u) + c))` using physical cells. Implicit methods use the supplied `tau`. All methods shorten the final step to reach `final_time`.
 
-`save_every` counts **completed time steps**, not RK stages or fixed-point iterations. It controls history snapshots and summary printing. The initial and final states are retained even if they fall outside the interval. Snapshots accumulate in memory; the main workflow writes files after the solver finishes successfully, not at every snapshot.
+`save_every` counts **completed time steps**, not RK stages or nonlinear iterations. It controls history snapshots and summary printing. The initial and final states are retained even if they fall outside the interval. Snapshots accumulate in memory; the main workflow writes files after the solver finishes successfully, not at every snapshot.
 
-For implicit methods, `limit` caps inner iterations per step; `eps_tol` controls their stopping criterion; `relax_factor` lies in `(0, 1]`. A stable implicit time discretisation does not guarantee that its fixed-point solver converges for any `tau`.
+### Selecting Newton or fixed-point iteration
+
+Newton is the default for both implicit time integrators. The full state is returned by the nonlinear solve; the outer time loop must not apply another `tau * rate` update.
+
+```python
+from implicit_Euler import implicit_euler
+from crank_nicolson import crank_nicolson
+
+# Default: Newton, with the Jacobian rebuilt every third inner iteration.
+q_final, history = implicit_euler(q_initial, domain, final_time, bc_settings, tau=1e-5)
+
+# Explicitly select relaxed fixed point.
+q_final, history = crank_nicolson(q_initial, domain, final_time, bc_settings, tau=1e-5, nonlinear_method="fpi", relax_factor=0.5)
+
+# Rebuild the Jacobian at every Newton iteration.
+q_final, history = crank_nicolson(q_initial, domain, final_time, bc_settings, tau=1e-5, jacobian_every=1)
+```
+
+The examples assume that the domain, initial state and boundary settings have already been constructed. Each call starts a separate integration from `t=0`.
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `tau` | Required | Prescribed physical time step [s]; only the final step is shortened. |
+| `nonlinear_method` | `"newton"` | `"newton"` or `"fpi"`. |
+| `eps_tol` | `1e-6` | Relative successive-iterate vector-change tolerance in every physical cell. |
+| `limit` | `1000` | Maximum inner iterations for each physical time step. |
+| `relax_factor` | `None` | The time integrator chooses `1.0` for Newton or `0.25` for FPI. A supplied value must lie in `(0, 1]`. |
+| `eps_j` | `1e-6` | Newton finite-difference perturbation factor; unrelated to the stopping tolerance. |
+| `q_reference` | `None` | Automatic reference scales, or five finite positive component scales. Used only by Newton. |
+| `jacobian_every` | `3` | Positive integer: rebuild and factorise on inner iterations `1, 1+k, 1+2*k, ...`. Used only by Newton. |
+| `save_every` | `100` | Completed physical time steps between snapshots and summary lines. |
+
+`eps_j`, `q_reference` and `jacobian_every` are ignored when `nonlinear_method="fpi"`. The simplified Newton implementation uses **fixed damping**, not automatic backtracking. It does not automatically reduce `tau` or recover from an invalid state.
+
+Inside each implicit solver settings block in `main.py`, use:
+
+```python
+tau = 1e-5
+save_every = 50
+eps_tol = 1e-6
+limit = 1000
+nonlinear_method = "newton"  # Or "fpi".
+relax_factor = None         # 1.0 for Newton; 0.25 for FPI.
+eps_j = 1e-6
+q_reference = None
+jacobian_every = 3
+
+solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "nonlinear_method": nonlinear_method, "relax_factor": relax_factor, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every}
+```
+
+Both implicit methods contain their own full time loop. There is no `integrate_implicit` dispatcher or additional boundary-condition wrapper. The existing `apply_boundary_conditions` function is called directly wherever required.
+
+### Progress output
+
+The implicit methods use short labels:
+
+| Label | Meaning |
+| --- | --- |
+| `IE` | Implicit (backward) Euler |
+| `CN` | Crank–Nicolson |
+| `NWT` | Newton iteration |
+| `FP` | Fixed-point iteration |
+| `err` | Maximum per-cell relative successive-iterate change |
+
+Examples of the changing progress line and a completed-step summary:
+
+```text
+CN | t=1.0000e-05 | NWT 2/1000 | err=8.291e-04
+CN | t=2.0000e-05 | NWT converged
+N=50 t=5.000e-04 dt=1.00e-05 pmax=4.000e+07 |u|max=2.000e+01
+```
+
+These are illustrative values. During the inner solve, `t` is the beginning of the current physical time step. After convergence it advances to the accepted time. Inner-iteration and converged messages overwrite the same line; the summary starts a new line after every `save_every` completed steps and after the final step. The old inner counter is not a physical-step counter.
+
+The print statements use `\r`, `end=""` and `.ljust(76)`. The leading carriage return occupies one character in the string, leaving at least 75 visible characters including padding. Spaces erase remnants of a longer previous message. The summary omits `end=""`, so it ends with a newline. No `shutil` import is needed.
+
+Use a terminal **at least 76 columns wide** for the usual message lengths. `.ljust` sets a minimum width; it does not truncate text. Unusually large counters or values can still make a message wider than the terminal. A width of 150 previously caused wrapping even when the visible text itself was short.
+
+For example, the Newton progress print inside `newton_CN` is:
+
+```python
+print(f"\rCN | t={time:.4e} | NWT {counter}/{limit} | err={max_error:.3e}".ljust(76), end="", flush=True)
+```
+
+A stable implicit time discretisation does not guarantee convergence of its nonlinear solver for an arbitrary `tau`.
 
 ## Data structures and array shapes
 
@@ -362,7 +446,7 @@ It treats every other `*.txt` file in the folder as a primitive file. Keep unrel
 
 ### What is not saved
 
-The checked-in `data_io.py` currently exposes **only `save_primitives` and `load_primitives`**. It does not save the full `domain` dictionary, conservative-state arrays, ghost cells, rule functions, boundary settings, solver options or restart metadata. In particular, there are no `save_domain` / `load_domain` functions in this revision.
+The `data_io.py` interface described here exposes **only `save_primitives` and `load_primitives`**. It does not save the full `domain` dictionary, conservative-state arrays, ghost cells, rule functions, boundary settings, solver options or restart metadata. In particular, there are no `save_domain` / `load_domain` functions in this revision.
 
 Loaded coordinates are sufficient for solution plots, but do not determine the original cell faces, areas, volumes or ghost geometry. `plot_domain` still requires the original/rebuilt domain and its area rule. Keep the case settings if you need that geometry later. Saved primitive output is a post-processing format, not a complete restart checkpoint.
 
@@ -501,15 +585,31 @@ Exact public signatures:
 ```python
 explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100)
 rk4(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100)
-implicit_euler(q_initial, domain, final_time, bc_settings, tau, save_every=100, eps_tol=1e-6, limit=1000, relax_factor=0.25)
-crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=100, eps_tol=1e-6, limit=1000, relax_factor=0.25)
+implicit_euler(q_initial, domain, final_time, bc_settings, tau, save_every=100, eps_tol=1e-6, limit=1000, relax_factor=None, nonlinear_method="newton", eps_j=1e-6, q_reference=None, jacobian_every=3)
+crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=100, eps_tol=1e-6, limit=1000, relax_factor=None, nonlinear_method="newton", eps_j=1e-6, q_reference=None, jacobian_every=3)
 ```
 
 All return `(q_final, history)`, apply boundary conditions during evolution, collect primitive snapshots, and print a final mass/energy comparison. Calling a solver directly does not create output files; `save_primitives` performs that separate step.
 
 `get_time_step(u, c, dx, cfl=0.5)` is defined in both explicit-method modules. Supply matching physical-cell arrays; it returns one scalar time step [s].
 
-`fixed_point_euler(...)` and `fixed_point_CN(...)` each accept `q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=0.25, time=0.0`. They solve **one** time step and return the new full conservative state, not a residual or history. The outer integrator must not multiply their return value by `tau` again. `time` is only a progress-display label.
+The four nonlinear routines are separate complete functions, each solving **one physical time step**:
+
+```python
+fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=0.25, time=0.0)
+fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=0.25, time=0.0)
+newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3)
+newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3)
+```
+
+Every routine returns the new full conservative state `(5, Nt)`, including populated ghost cells. It does not return a residual or history. The outer integrator must not multiply this state by `tau` again. `time` is only a progress-display label; one-step routines do not advance an outer clock themselves. Direct one-step calls use their numeric `relax_factor` default; `None` is resolved by the time integrator, not by these routines.
+
+| Shared helper | Inputs | Return |
+| --- | --- | --- |
+| `reference_state(q, domain, q_reference=None)` | Full conservative state and domain; optional five component scales | Reference array `(5,)` |
+| `residual_jacobian(q, r, domain, bc_settings, reference, eps_j=1e-6)` | Full state `(5, Nt)` with consistent ghosts, its current physical residual `(5, N)`, boundary settings and scales `(5,)` | SciPy CSC sparse matrix `(5*N, 5*N)` |
+
+Only the reference scales and residual Jacobian are shared numerical helpers; each nonlinear method contains its own equation, update and convergence loop.
 
 ### Conservation diagnostic
 
@@ -525,6 +625,83 @@ It prints and returns `(mass_error, energy_error)`, the signed percentage change
 
 The spatial operator is `dq/dt = R(q)`. Rusanov dissipation uses the maximum of `abs(u) + c` at the two interface states. The residual includes the area-change momentum source and the volume-fraction source based on interface velocities.
 
+### Newton and Jacobian reuse
+
+Newton solves the nonlinear equation defect `G(q)=0`. It does not seek `R(q)=0`, which would mean a stationary semidiscrete state.
+
+For backward Euler:
+
+$$
+G(q)=q-q^n-\tau R(q),\qquad J_G=I-\tau J_R.
+$$
+
+For Crank–Nicolson:
+
+$$
+G(q)=q-q^n-\frac{\tau}{2}[R(q^n)+R(q)],\qquad J_G=I-\frac{\tau}{2}J_R.
+$$
+
+Here `J_R = ∂R/∂q`. Each iteration solves and updates:
+
+$$
+J_G\,\delta q=-G(q^{(m)}),\qquad q^{(m+1)}=q^{(m)}+\omega\,\delta q.
+$$
+
+`omega = relax_factor` is fixed during the solve. A value of `1.0` applies the full correction. There is **no backtracking, line search, automatic step rejection/retry, or adaptive relaxation** in this simplified version. EOS or numerical errors can terminate a run.
+
+When `(counter - 1) % jacobian_every == 0`, calculate `J_R`, form `J_G`, and factorise it using `scipy.sparse.linalg.splu`. On the remaining iterations reuse that factorisation with `factorisation.solve(...)`. **Recalculate `R(q)` and `G(q)` every iteration**, even when the matrix is reused.
+
+| `jacobian_every` | Rebuild iterations within one time step |
+| --- | --- |
+| `1` | 1, 2, 3, 4, ... |
+| `2` | 1, 3, 5, 7, ... |
+| `3` (default) | 1, 4, 7, 10, ... |
+
+The counter restarts for every physical time step, so the first Jacobian and factorisation are always fresh. They are not carried across time steps. Matrix reuse is a modified Newton method: it saves work per iteration but may increase the number of iterations or prevent convergence. Compare total runtime, not just iteration count; use `jacobian_every=1` if reuse causes problems.
+
+### Numerical Jacobian and state ordering
+
+Flatten physical arrays by cell:
+
+```python
+q_vector = q[:, physical].flatten(order="F")
+g_vector = g_m.flatten(order="F")
+correction = factorisation.solve(-g_vector)
+correction = correction.reshape((5, len(physical)), order="F")
+```
+
+In zero-based physical-cell indexing, `row = 5*i + equation` and `column = 5*j + component`. A `(5, 5)` block describes how the five residual equations in cell `i` respond to the five state entries in cell `j`. Ghost cells are not independent unknowns.
+
+For the current nonperiodic MUSCL stencil, perturbing cell `j` affects physical residual cells `j-2` through `j+2`, clipped at the boundaries. The helper perturbs one component at a time in five spatial groups (`0,5,10,...`; `1,6,11,...`; etc.). Each perturbed state receives direct left and right boundary updates before `compute_residual` is evaluated.
+
+A full rebuild uses at most 25 perturbed residual evaluations (five groups × five components), in addition to the current baseline residual already evaluated by the Newton iteration. Some groups are empty on very small meshes. For periodic boundaries the helper deliberately uses individual cell perturbations and extracts all residual rows: this handles wraparound safely but costs `5*N` perturbed evaluations per rebuild.
+
+The matrix is assembled as a SciPy `csc_matrix`. Perturbations use a one-sided difference, dividing by the actual floating-point change applied to each entry. The simplified implementation does not retry invalid perturbations or automatically repair a failed factorisation.
+
+### Reference scales for perturbations
+
+For component `b` and physical cell `j`, the nominal perturbation magnitude is
+
+$$
+h_{b,j}=\epsilon_J\max(|q_{b,j}^{(m)}|,q_b^{\mathrm{ref}}).
+$$
+
+`eps_j` is `epsilon_J`. The automatic five-entry reference is derived from the old state `q_n` once per physical time step and stays fixed during its nonlinear iterations:
+
+| Component | Automatic reference | Units |
+| --- | --- | --- |
+| Gas partial density | Maximum physical-cell `abs(q[0])` | kg/m³ |
+| Liquid partial density | Maximum physical-cell `abs(q[1])` | kg/m³ |
+| Momentum density | Maximum physical-cell `rho * (abs(u) + c)` | kg/(m² s) |
+| Total energy density | Maximum physical-cell `abs(q[3])` | J/m³ |
+| Gas volume fraction | `1.0` | Dimensionless |
+
+The acoustic momentum scale is nonzero even when the initial velocity is zero. It is a differentiation scale, not an assumed fluid velocity. For volume fraction, the perturbation points towards the interior of `(0, 1)` and its magnitude is capped at `0.25`; at the default `eps_j` it is normally `1e-6`.
+
+A custom `q_reference` must contain five finite positive values in the component order above. It is a set of scales, not a complete thermodynamic state, and is not a convergence tolerance. Custom values are reused at each time step. The current local magnitude can exceed a reference, in which case it determines the perturbation instead. Domain-wide maxima are practical defaults, but can be too large for cells whose values are much smaller; choose custom scales or a smaller `eps_j` when justified by derivative checks.
+
+### Relaxed fixed-point iteration
+
 For backward Euler, the relaxed fixed-point update is
 
 $$
@@ -539,13 +716,15 @@ $$
 
 Here `omega = relax_factor`, `n` indexes physical time steps, and `m` indexes inner iterations. The old state `q_n` remains fixed; Crank–Nicolson also calculates `R(q_n)` once per step.
 
-Both nonlinear solvers check the relative Euclidean norm of the successive-iterate change separately in each physical cell:
+### Original project convergence check
+
+All four nonlinear solvers check the relative Euclidean norm of the successive-iterate change separately in each physical cell:
 
 $$
 \epsilon_j=\frac{\lVert q_j^{(m+1)}-q_j^{(m)}\rVert_2}{\max(\lVert q_j^{(m+1)}\rVert_2,\mathrm{tiny})}.
 $$
 
-Every physical cell must satisfy `epsilon_j < eps_tol`. This is a **five-component vector-norm check**, not five separate relative tests and not a direct backward Euler/Crank–Nicolson equation-defect check. Component scales and the relaxation factor affect the reported change. Failure to meet tolerance within `limit` raises `RuntimeError`; the normal main workflow then does not proceed to saving a completed run.
+Every physical cell must satisfy `epsilon_j < eps_tol`. This is a **five-component vector-norm check**, not five separate relative tests and not a direct backward Euler/Crank–Nicolson equation-defect check. Component scales and the relaxation factor affect the reported change. A small damped update is not proof that the equation defect is small; the original project stopping criterion is intentionally retained. Failure to meet tolerance within `limit` raises `RuntimeError`; the normal main workflow then does not proceed to saving a completed run.
 
 MUSCL uses minmod slopes. When necessary, a bisection search reduces both face deviations of a cell by the same factor between zero and one to satisfy the pressure safeguard. This avoids abruptly discarding the full slope when only a small reduction is needed. If the cell-average state itself fails the safeguard, the code falls back to its cell-average face states; it does not repair that average. The 5,000 Pa value is a numerical safeguard in this implementation, not a universal physical threshold.
 
@@ -553,6 +732,11 @@ MUSCL uses minmod slopes. When necessary, a bisection search reduces both face d
 
 | Symptom or question | What to check |
 | --- | --- |
+| `ModuleNotFoundError: scipy` | Install with `python -m pip install scipy` using the interpreter that runs the project. |
+| Newton becomes slower or fails after enabling reuse | Try `jacobian_every=1`; an older Jacobian can need more iterations. |
+| Newton produces an invalid state | The simplified version has no backtracking. Reduce `tau` or the fixed `relax_factor` and inspect the state. |
+| Progress wraps onto successive lines | Use the short labels and a terminal at least 76 columns wide; remove old `.ljust(150)` formatting. |
+| Characters remain after `converged` | Keep `.ljust(76)` consistently on the abbreviated progress, converged and summary messages. `\r` alone does not clear the line. |
 | Files appear in an unexpected place | `Path.cwd()` determines the data directory. Run from `python`, or use an explicit path when loading. |
 | Loading opens an older run | A new save may have created `_1`, `_2`, etc. Use the returned `results_folder` or the exact suffixed name. |
 | Array-size mismatch after loading | Loaded arrays already exclude ghosts. Do not apply `domain["physical_ind"]` again. |
