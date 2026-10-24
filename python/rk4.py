@@ -2,7 +2,7 @@
 
 import numpy as np
 from conditions import apply_boundary_conditions
-from solver_functions import get_primitives, q_to_primitive, compute_residual, rusanov_flux
+from solver_functions import get_primitives, compute_residual
 from miscellaneous import conservation_check
 
 
@@ -24,7 +24,7 @@ def rk4(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100):
     q_current = apply_boundary_conditions(domain, q_current, bc_settings["left"], "left")
     q_current = apply_boundary_conditions(domain, q_current, bc_settings["right"], "right")
     # Save the initial state.
-    primitives = get_primitives(q_current, q_to_primitive)
+    primitives = get_primitives(q_current)
 
     history = {"times": [t],
                "primitives": {} }
@@ -42,34 +42,36 @@ def rk4(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100):
         tau = min(tau, remaining)
         # Change this into a inner loop for k1, k2, k3, k4 in RK4
         # k1
-        k1 = compute_residual(q_current, domain, q_to_primitive, rusanov_flux)
+        k1 = compute_residual(q_current, domain)
         q_1 = q_current.copy()
         q_1[:, physical] = q_current[:, physical] + 0.5*tau*k1
         q_1 = apply_boundary_conditions(domain, q_1, bc_settings["left"], "left")
         q_1 = apply_boundary_conditions(domain, q_1, bc_settings["right"], "right")
         # k2
-        k2 = compute_residual(q_1, domain, q_to_primitive, rusanov_flux)
+        k2 = compute_residual(q_1, domain)
         q_2 = q_current.copy()
         q_2[:, physical] = q_2[:, physical] + 0.5*tau*k2
         q_2 = apply_boundary_conditions(domain, q_2, bc_settings["left"], "left")
         q_2 = apply_boundary_conditions(domain, q_2, bc_settings["right"], "right")
         # k3
-        k3 = compute_residual(q_2, domain, q_to_primitive, rusanov_flux)
+        k3 = compute_residual(q_2, domain)
         q_3 = q_current.copy()
         q_3[:, physical] = q_3[:, physical] + tau*k3
         q_3 = apply_boundary_conditions(domain, q_3, bc_settings["left"], "left")
         q_3 = apply_boundary_conditions(domain, q_3, bc_settings["right"], "right")
         # k4
-        k4 = compute_residual(q_3, domain, q_to_primitive, rusanov_flux)
+        k4 = compute_residual(q_3, domain)
         # Final
         q_current[:, physical] = q_current[:, physical] + tau/6*(k1+2*k2+2*k3+k4)
+        q_current = apply_boundary_conditions(domain, q_current, bc_settings["left"], "left")
+        q_current = apply_boundary_conditions(domain, q_current, bc_settings["right"], "right")
         
             
         t = final_time if last_step else t + tau
         counter += 1
 
         # primitive update
-        primitives = get_primitives(q_current, q_to_primitive)
+        primitives = get_primitives(q_current)
 
         if counter % save_every == 0 or t >= final_time:
             history["times"].append(t)

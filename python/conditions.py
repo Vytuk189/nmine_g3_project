@@ -6,7 +6,7 @@ from solver_functions import primitive_to_q
 
 def p_rule(x):
     if 4 < x < 6:
-        return 500e5      # 500 bar in Pa (reference plot; task table states 50 bar)
+        return 500e5    
     else:
         return 10e5
 
@@ -36,7 +36,7 @@ def fixed_state(side):
     return primitive_to_q(p, u, t_g, t_l, alpha_g)
 
 
-def initialize_state(domain, area_rule, p_rule, t_g_rule, t_l_rule, u_rule, alpha_g_rule, primitive_to_q, n=100):
+def initialize_state(domain, area_rule, p_rule, t_g_rule, t_l_rule, u_rule, alpha_g_rule, n=100):
     """
     Initialize conservative cell averages using the trapezoidal rule.
     Ghost cells copy the nearest physical cell.

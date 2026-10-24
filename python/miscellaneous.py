@@ -1,14 +1,14 @@
 import numpy as np
 
-from solver_functions import q_to_primitive, get_primitives
+from solver_functions import get_primitives
 
 
 def conservation_check(q_initial, q_final, domain):
     physical_cell_ind = domain["physical_ind"]
     cell_volumes = domain["volumes"][physical_cell_ind]
 
-    primitives_i = get_primitives(q_initial, q_to_primitive)
-    primitives_f = get_primitives(q_final, q_to_primitive)
+    primitives_i = get_primitives(q_initial)
+    primitives_f = get_primitives(q_final)
 
     cell_densities_i = primitives_i["rho"][physical_cell_ind]
     cell_tot_energies_i = primitives_i["e_total"][physical_cell_ind]

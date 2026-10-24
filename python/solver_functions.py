@@ -160,8 +160,8 @@ def q_to_primitive(q, eps_alpha=1e-8, eps_m=1e-12):
     return primitive
 
 
-def get_primitives(q, q_to_primitive):
-    """Returns a dictionary of primitive arrays, including ghost cells."""
+def get_primitives(q):
+    """Convert q internally with q_to_primitive; return arrays including ghosts."""
     first = q_to_primitive(q[:, 0])
 
     primitives = {name: np.zeros(q.shape[1]) for name in first}
@@ -179,32 +179,43 @@ def minmod(a, b):
 
 
 def muscl_reconstruction(q, domain):
-    """Return left/right cell-face states; Q has shape (5, N_total)."""
-    x = domain["x_centres"]
-    faces = domain["x_faces"]
+    x = domain['x_centres']
+    faces = domain['x_faces']
     sigma = np.zeros_like(q, dtype=float)
-    delta_left = (q[:, 1:-1] - q[:, :-2]) / (x[1:-1] - x[:-2])
-    delta_right = (q[:, 2:] - q[:, 1:-1]) / (x[2:] - x[1:-1])
+    delta_left = (q[:, 1:-1] - q[:, :-2])/(x[1:-1] - x[:-2])
+    delta_right = (q[:, 2:] - q[:, 1:-1])/(x[2:] - x[1:-1])
     sigma[:, 1:-1] = minmod(delta_left, delta_right)
     q_left = q - sigma*(x - faces[:-1])
     q_right = q + sigma*(faces[1:] - x)
-    # Revert to first order if either reconstructed pressure is too low.
-    for j in range(q.shape[1]):
+
+    def valid_faces(left, right):
         try:
-            p_left = q_to_primitive(q_left[:, j])["p"]
-            p_right = q_to_primitive(q_right[:, j])["p"]
-            valid = p_left > 5000 and p_right > 5000
+            return q_to_primitive(left)['p'] >= 5000 and q_to_primitive(right)['p'] >= 5000
         except ValueError:
-            valid = False
-    
-        if not valid:
+            return False
+
+    for j in range(q.shape[1]):
+        if valid_faces(q_left[:, j], q_right[:, j]):
+            continue
+        if not valid_faces(q[:, j], q[:, j]):
             q_left[:, j] = q[:, j]
             q_right[:, j] = q[:, j]
-    
+            continue
+        left_change = q_left[:, j] - q[:, j]
+        right_change = q_right[:, j] - q[:, j]
+        lower, upper = 0.0, 1.0
+        for _ in range(40):
+            theta = 0.5*(lower + upper)
+            if valid_faces(q[:, j] + theta*left_change, q[:, j] + theta*right_change):
+                lower = theta
+            else:
+                upper = theta
+        q_left[:, j] = q[:, j] + lower*left_change
+        q_right[:, j] = q[:, j] + lower*right_change
     return q_left, q_right
 
 
-def rusanov_flux(q_interface_left, q_interface_right, q_to_primitive):
+def rusanov_flux(q_interface_left, q_interface_right):
     """Return the five-component flux and the interface velocity."""
     primitive_left = q_to_primitive(q_interface_left)
     primitive_right = q_to_primitive(q_interface_right)
@@ -218,7 +229,7 @@ def rusanov_flux(q_interface_left, q_interface_right, q_to_primitive):
     return flux, u_star
 
 
-def compute_residual(q, domain, q_to_primitive, rusanov_flux):
+def compute_residual(q, domain):
     """
     Compute dQ/dt for physical cells using source-term Option 2.
 
@@ -244,7 +255,7 @@ def compute_residual(q, domain, q_to_primitive, rusanov_flux):
         face = first_face + i
         q_interface_left = q_right[:, face - 1] if (i > 0 or ng_left > 0) else fixed_state("left")    # right edge of the face on the left
         q_interface_right = q_left[:, face] if (i < n_cells or ng_right > 0) else fixed_state("right")       # left edge of the face on the right
-        flux[:, i], u_star[i] = rusanov_flux(q_interface_left, q_interface_right, q_to_primitive)
+        flux[:, i], u_star[i] = rusanov_flux(q_interface_left, q_interface_right)
 
     rate = np.zeros((5, n_cells))
     for i, j in enumerate(physical_ind):

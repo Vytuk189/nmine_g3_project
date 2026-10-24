@@ -2,7 +2,7 @@
 
 import numpy as np
 from conditions import apply_boundary_conditions
-from solver_functions import get_primitives, q_to_primitive, compute_residual, rusanov_flux
+from solver_functions import get_primitives, compute_residual
 from miscellaneous import conservation_check
 
 
@@ -24,7 +24,7 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
     q_current = apply_boundary_conditions(domain, q_current, bc_settings["left"], "left")
     q_current = apply_boundary_conditions(domain, q_current, bc_settings["right"], "right")
     # Save the initial state.
-    primitives = get_primitives(q_current, q_to_primitive)
+    primitives = get_primitives(q_current)
 
     history = {"times": [t],
                "primitives": {} }
@@ -33,13 +33,13 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
         history["primitives"][name] = [primitives[name].copy()]
 
     while t < final_time:
-        print(f"\rCalculating{'.' * (counter % 3 + 1):<3}", end="", flush=True)
+        print(f"\rCalculating with Euler{'.' * (counter % 3 + 1):<3}", end="", flush=True)
         tau = get_time_step(primitives["u"][physical], primitives["c"][physical], domain["dx"][physical], cfl)
         if not np.isfinite(tau) or tau <= 0 or t + tau == t: raise ValueError("Invalid time step: time cannot advance.")
         remaining = final_time - t
         last_step = tau >= remaining
         tau = min(tau, remaining)
-        rate = compute_residual(q_current, domain, q_to_primitive, rusanov_flux)
+        rate = compute_residual(q_current, domain)
         q_next = q_current.copy()
         q_next[:, physical] = q_current[:, physical] + tau*rate
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
@@ -49,7 +49,7 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
         counter += 1
 
         # primitive update
-        primitives = get_primitives(q_current, q_to_primitive)
+        primitives = get_primitives(q_current)
 
         if counter % save_every == 0 or t >= final_time:
             history["times"].append(t)
