@@ -1,29 +1,34 @@
-import numpy as np
+"""Conservation diagnostics computed directly from conservative cell averages."""
 
-from solver_functions import get_primitives
+import numpy as np
 
 
 def conservation_check(q_initial, q_final, domain):
-    physical_cell_ind = domain["physical_ind"]
-    cell_volumes = domain["volumes"][physical_cell_ind]
+    """Print total and per-phase changes; return mixture mass and energy change [%].
 
-    primitives_i = get_primitives(q_initial)
-    primitives_f = get_primitives(q_final)
+    Ghosts are excluded. A zero initial total has undefined percentage change
+    (nan); the corresponding absolute change is still reported.
+    Open boundaries can legitimately exchange mass and energy.
+    """
+    physical = domain["physical_ind"]
+    volumes = domain["volumes"][physical]
 
-    cell_densities_i = primitives_i["rho"][physical_cell_ind]
-    cell_tot_energies_i = primitives_i["e_total"][physical_cell_ind]
-    cell_densities_f = primitives_f["rho"][physical_cell_ind]
-    cell_tot_energies_f = primitives_f["e_total"][physical_cell_ind]
+    gas_mass_i = np.sum(volumes*q_initial[0, physical])
+    gas_mass_f = np.sum(volumes*q_final[0, physical])
+    liquid_mass_i = np.sum(volumes*q_initial[1, physical])
+    liquid_mass_f = np.sum(volumes*q_final[1, physical])
+    total_mass_i = gas_mass_i + liquid_mass_i
+    total_mass_f = gas_mass_f + liquid_mass_f
+    total_energy_i = np.sum(volumes*q_initial[3, physical])
+    total_energy_f = np.sum(volumes*q_final[3, physical])
 
-    total_mass_i = np.sum(cell_volumes*cell_densities_i)
-    total_mass_f = np.sum(cell_volumes*cell_densities_f)
-    total_e_i = np.sum(cell_volumes*cell_densities_i*cell_tot_energies_i)
-    total_e_f = np.sum(cell_volumes*cell_densities_f*cell_tot_energies_f)
+    initial = np.array([gas_mass_i, liquid_mass_i, total_mass_i, total_energy_i])
+    final = np.array([gas_mass_f, liquid_mass_f, total_mass_f, total_energy_f])
+    changes = final - initial
+    percentages = np.full(4, np.nan)
+    np.divide(100*changes, initial, out=percentages, where=initial != 0)
 
-    mass_error = 100*(total_mass_f - total_mass_i)/total_mass_i
-    energy_error = 100*(total_e_f - total_e_i)/total_e_i
+    for name, unit, change, percentage in zip(["Gas mass", "Liquid mass", "Total mass", "Total energy"], ["kg", "kg", "kg", "J"], changes, percentages):
+        print(f"{name} change: {change:.6e} {unit} ({percentage:.6e} %)")
 
-    print(f"Mass conservation error: {mass_error:.6e} %")
-    print(f"Energy conservation error: {energy_error:.6e} %")
-
-    return mass_error, energy_error
+    return percentages[2], percentages[3]

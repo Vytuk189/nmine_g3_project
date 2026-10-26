@@ -16,9 +16,9 @@ from plotting import plot_domain, simple_plot
 # WORKFLOW
 run_simulation = True       # False: load an existing result folder and plot only.
 show_domain = True         # Close the domain plot to begin the computation.
-folder_name = "task14ienewton"    # Existing names receive suffixes _1, _2, etc.
+folder_name = "task15cnfpi"    # Existing names receive suffixes _1, _2, etc.
 load_folder = "task14cn"    # Used when run_simulation=False.
-solver_name = "implicit_euler"  # explicit_euler, rk4, implicit_euler, crank_nicolson.
+solver_name = "crank_nicolson"  # explicit_euler, rk4, implicit_euler, crank_nicolson.
 
 
 # DOMAIN
@@ -36,7 +36,7 @@ initial_velocity_rule = u_rule
 initial_gas_temperature_rule = t_g_rule
 initial_liquid_temperature_rule = t_l_rule
 initial_gas_fraction_rule = alpha_g_rule
-initial_integration_intervals = 100
+initial_integration_intervals = 100  # Midpoint subintervals per physical cell.
 
 
 # BOUNDARIES AND DURATION
@@ -45,23 +45,30 @@ bc_settings = {"left": "reflective", "right": "reflective"}
 
 # reflective: wall; reflected ghost momentum changes sign.
 # zerograd: ghosts copy the nearest physical cell.
-# periodic: use on both sides, with one ghost cell per side.
+# periodic: use on both sides; multiple ghost cells wrap successive cells.
 # fixed: define the external state in conditions.fixed_state(side);
-#        use zero ghost cells on that side.
+#        use at least one ghost cell on that side, as for all boundaries.
 
 
 # SOLVER SETTINGS
 # save_every counts completed physical time steps, not nonlinear iterations.
 # The initial and final states are always included in history.
+reconstruction = "muscl"  # Options: "muscl" or "first_order"; applies to all solvers.
+pressure_fallback = "gradual"  # MUSCL pressure fallback: "first_order" or "gradual".
+# Both use the existing hard-coded 5000 Pa threshold.
+# This setting has no effect when reconstruction="first_order".
+convergence_check = "teacher"  # Implicit solvers only: "scaled" or "teacher".
+# scaled: unrelaxed component-scaled corrections in physical cells (current check).
+# teacher: norm(q_next-q_m, 2)/norm(q_next, 2), full matrices including ghosts.
 
 if solver_name == "explicit_euler":
-    cfl = 0.5
+    cfl = 0.1
     save_every = 50
 
     solver_options = {"cfl": cfl, "save_every": save_every}
 
 elif solver_name == "rk4":
-    cfl = 0.5
+    cfl = 0.1
     save_every = 50
 
     solver_options = {"cfl": cfl, "save_every": save_every}
@@ -69,31 +76,35 @@ elif solver_name == "rk4":
 elif solver_name == "implicit_euler":
     tau = 1e-5
     save_every = 50
-    eps_tol = 1e-6
-    limit = 1000
+    eps_tol = 1e-6          # Tolerance for the selected convergence check.
+    limit = 500
 
     nonlinear_method = "newton"  # Options: "newton" or "fpi".
-    relax_factor = None         # None: 1.0 for Newton, 0.25 for FPI.
+    relax_factor = 1.0         # So far, FPI does not converge for higher values, even at smaller time steps!.
     eps_j = 1e-6
     q_reference = None
-    jacobian_every = 10          # Rebuild Jacobianon every nth Newton iteration
-    solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every}
+    jacobian_every = 3          # Rebuild Jacobian only every few Newton iterations; 1 rebuilds every iteration.
+    solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every, "convergence_check": convergence_check}
 
 elif solver_name == "crank_nicolson":
-    tau = 1e-5
+    tau = 1e-6
     save_every = 50
-    eps_tol = 1e-6
-    limit = 1000
+    eps_tol = 1e-6          # Tolerance for the selected convergence check.
+    limit = 500
 
     nonlinear_method = "newton"
-    relax_factor = None
+    relax_factor = 1.0  #So far, FPI with relax_factor=1.0 works only for tau=1e-6, tau = 1e-5 does not converge!
     eps_j = 1e-6
     q_reference = None
-    jacobian_every = 10
+    jacobian_every = 3
 
-    solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every}
+    solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every, "convergence_check": convergence_check}
 else:
     raise ValueError(f"Unknown solver '{solver_name}'. Choose explicit_euler, rk4, implicit_euler or crank_nicolson.")
+
+
+solver_options["reconstruction"] = reconstruction
+solver_options["pressure_fallback"] = pressure_fallback
 
 
 # PLOTS

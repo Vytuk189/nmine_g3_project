@@ -11,7 +11,7 @@ def get_time_step(u, c, dx, cfl=0.5):
     return cfl * np.min(dx / (np.abs(u) + c))
 
 
-def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100):
+def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100, reconstruction="muscl", pressure_fallback="first_order"):
 
     if not isinstance(save_every, (int, np.integer)) or save_every <= 0: raise ValueError("save_every must be a positive integer.")
     if not np.isfinite(final_time) or final_time < 0: raise ValueError("final_time must be finite and nonnegative.")
@@ -39,7 +39,7 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
         remaining = final_time - t
         last_step = tau >= remaining
         tau = min(tau, remaining)
-        rate = compute_residual(q_current, domain)
+        rate = compute_residual(q_current, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
         q_next = q_current.copy()
         q_next[:, physical] = q_current[:, physical] + tau*rate
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
@@ -57,10 +57,11 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
             for name in primitives:
                 history["primitives"][name].append(primitives[name].copy())
 
+            min_p = np.min(primitives["p"][physical])
             max_p = np.max(primitives["p"][physical])
             max_speed = np.max(abs(primitives["u"][physical]))
 
-            print(f"\rIteration: {counter}, t: {t:.6g} s, tau: {tau:6g}, max p: {max_p:.6g} Pa, max |u|: {max_speed:.6g} m/s")
+            print(f"\rIteration: {counter} | t={t:.3e} | dt={tau:.2e} | min_p={min_p:.3e} | max_p={max_p:.3e} | max_u={max_speed:.3e}", flush=True)
 
     # Each primitive array has shape (number of saved times, N_total).
     history["times"] = np.array(history["times"])

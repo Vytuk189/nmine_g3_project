@@ -1,46 +1,86 @@
 # Configuring and running the solver
 
-Keep the Python files together, open a terminal in that folder and run `python main.py`. NumPy and Matplotlib are required. Edit the settings in `main.py`; the bottom of the file performs the shared build → initialise → solve → save → reload → plot workflow. Close each plot window to continue.
+Install NumPy, SciPy and Matplotlib. From `python/`, run `python main.py`. Edit the settings at the top of main; the shared build → initialise → solve → save → reload → plot workflow follows below. Close the domain plot to continue.
 
-## Which settings belong to which solver?
+## Solver selection
 
-All three solvers receive `q_initial`, `domain`, `final_time`, `bc_settings` and `save_every`.
+Set `solver_name` to one of these names. All four functions receive the initial conservative state, domain, final time, boundary settings, `save_every`, and `reconstruction`.
 
-| Solver | Additional settings declared in its main.py block |
-| --- | --- |
-| `explicit_euler` | `cfl`: recalculates the time step from current velocity, sound speed and cell width. |
-| `rk4` | `cfl`: the same time-step estimate, with four RK stages per time step. |
-| `implicit_euler` | Required `tau` [s]; `eps_tol`, `limit`, `relax_factor` for relaxed fixed-point iteration. No CFL argument. |
-
-`save_every` counts completed time steps. All primitive variables are saved at these intervals, plus the initial and final states. Implicit Euler's `limit` counts inner nonlinear iterations and is unrelated to `save_every`.
-
-The default selected solver remains RK4. To switch, change `solver_name`, then edit its block. Implicit Euler shortens its prescribed `tau` only for the final step; nonlinear convergence can still require a smaller time step.
-
-## How the parameters flow
-
-| Call | What the caller supplies | What is handled internally |
+| Solver | Time step | Additional options |
 | --- | --- | --- |
-| `build_domain(m, node_density_rule, area_rule, n_cells, n_ghost)` | Geometry, rule functions and mesh size | Faces, centres, volumes and indices |
-| `initialize_state(domain, area_rule, p_rule, t_g_rule, t_l_rule, u_rule, alpha_g_rule, n=100)` | Mesh, initial profiles and quadrature resolution | Calls `primitive_to_q` directly |
-| `implicit_euler(q_initial, domain, final_time, bc_settings, tau, ...)` | Initial state, common integration settings and its solver options | Calls `fixed_point_euler` directly for each step |
-| `fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol, limit, relax_factor, time)` | One step's starting state and nonlinear controls | Residual and boundary updates; `time` is only a progress label |
-| `compute_residual(q, domain)` | Current state including populated ghosts and mesh | MUSCL reconstruction, Rusanov flux and source terms |
-| `rusanov_flux(q_interface_left, q_interface_right)` | Two reconstructed interface states | Calls `q_to_primitive` directly |
-| `get_primitives(q)` | Conservative state | Calls `q_to_primitive` directly |
-| `save_primitives(history, domain, folder_name)` | Full history and mesh | Selects physical cells and creates a unique output folder |
-| `load_primitives(folder_name)` | Saved folder name or path | Returns physical-cell coordinates and history |
-| `simple_plot(history, cell_centres, names, time, xlim=None)` | Loaded history, requested quantity/time and optional limits | Selects the nearest saved time and creates one or two y axes |
+| `explicit_euler` | `cfl`, set to 0.1 in main | None |
+| `rk4` | `cfl`, set to 0.1 in main | None |
+| `implicit_euler` | Required `tau` in seconds | Nonlinear controls below |
+| `crank_nicolson` | Required `tau` in seconds | Nonlinear controls below |
 
-Rule functions remain parameters because selecting geometry and initial profiles is part of configuring a case.
+The selected solver in main is implicit Euler. Implicit solvers have no CFL argument. Every integrator shortens its final step to reach `final_time`. All return `(q_final, history)`.
 
-The generic `nonlinear_solver` parameter was removed from implicit Euler: it now explicitly uses the backward Euler fixed-point solver. The existing `fixed_point_CN` helper is retained, but is not a registered time integrator and is not interchangeable with the backward Euler solver; it still returns a rate, as in the uploaded framework.
+`reconstruction="muscl"` is the default. Select `"first_order"` for piecewise constant face states. The option is passed consistently into nonlinear iterations and Jacobian evaluation.
 
-## Data and plotting
+## Nonlinear controls
 
-- In-memory conservative state: `(5, number of cells including ghosts)`.
-- In-memory history: `history['times']` and `history['primitives'][name]`, with primitive arrays shaped `(saved times, cells including ghosts)`.
-- Saved and reloaded primitive arrays contain only physical cells, with rows representing time and columns representing space.
-- New runs save under `data/folder_name` relative to the working directory, adding suffixes if necessary.
-- To plot an existing run, set `run_simulation=False` and select `load_folder`. The mesh and initial state are not rebuilt.
-- `plot_requests` selects quantities, requested times and optional x limits. Two quantities use separate axes, with the second in red. Stored SI units are used without conversion.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `nonlinear_method` | `"newton"` | Choose Newton or `"fpi"`. |
+| `eps_tol` | `1e-6` | Every component-scaled unrelaxed correction must be below this in every physical cell. |
+| `limit` | `1000` | Maximum iterations within each physical step. |
+| `relax_factor` | `1.0` | Unrelaxed for Newton and FPI. Supply a value in (0, 1] to change it. |
+| `eps_j` | `1e-6` | Finite-difference perturbation factor for Newton. |
+| `q_reference` | `None` | Automatic perturbation scales, or five positive custom values. Does not change convergence scales. |
+| `jacobian_every` | `3` | Rebuild/factorise on iterations 1, 4, 7, …; use 1 for every iteration. |
 
+The last three options affect Newton only. Main explicitly uses `jacobian_every=10`, while direct solver calls default to 3. FPI and Newton for IE and CN remain four separate full functions. They return the new full conservative state, including ghosts, not a rate. There is no backtracking or automatic step retry. Implicit time stability does not guarantee nonlinear convergence.
+
+Convergence scales come from the old state once per step: maximum gas/liquid partial densities floored at 1e-3 kg/m³, maximum rho*(abs(u)+c) for momentum, maximum absolute energy density floored at 1 J/m³, and 1 for alpha. The maximum absolute unrelaxed correction divided by its scale is checked in each cell. See the root README for equations and limitations.
+
+## Geometry, initial and boundary conditions
+
+Edit domain rules in `domain_rules.py`; edit initial profiles and `fixed_state` in `conditions.py`. Initial averages use `initial_integration_intervals` midpoint samples per cell. All boundaries now require at least one ghost per side, including fixed boundaries. Fixed ghosts contain the reservoir state and the physical edge remains an evolved cell. Periodic boundaries support successive wrapped ghosts; select periodic on both sides.
+
+MUSCL reconstructs area-weighted momentum and converts it back at faces. Its pressure safeguard uses literal 5000 Pa. Select `pressure_fallback="first_order"` (default) to replace failed face states by their cell average, or `"gradual"` for the previous 40-step reduction. There is no p_min option.
+
+## History, files and plots
+
+`save_every` counts completed physical time steps, not nonlinear iterations. Initial and final snapshots are always included. In-memory `q` is `(5, total_cells)` and history primitives are `(saved_times, total_cells)`. Time is stored in `history["times"]`.
+
+`save_primitives(history, domain, folder_name)` writes physical cells only under the current working directory's `data/`, adding suffixes to avoid overwriting. `load_primitives(folder_or_path)` returns `(cell_centres, history)` with primitive arrays `(saved_times, physical_cells)`. Do not apply `physical_ind` again after loading.
+
+Set `run_simulation=False` to load and plot an existing run. `plot_requests` contains `(names, time, xlim)` entries; two primitive names use two y axes, the second red. The nearest saved time is selected. SI units are retained.
+
+The current I/O saves primitive histories and physical coordinates, not full domain geometry or restart states. Plotting the mesh still requires the domain and area rule. Conservation diagnostics integrate the conservative arrays directly and report phase mass, mixture mass and total energy changes; open boundaries can exchange these quantities.
+
+## Comparing MUSCL pressure fallbacks
+
+In main, keep `reconstruction="muscl"` and select `pressure_fallback="first_order"` (default, assignment fallback) or `pressure_fallback="gradual"` (previous bisection). The option passes through every solver and Newton Jacobian evaluation. `reconstruction="first_order"` instead disables MUSCL everywhere and makes the pressure-fallback selection inactive. The threshold remains literal 5000 Pa.
+
+All four nonlinear one-step functions and both implicit time integrators now default to `relax_factor=1.0`. Set e.g. `relax_factor=0.25` explicitly to damp updates. Main exposes this option in each implicit block. The component-scaled unrelaxed convergence check remains the default; `convergence_check="teacher"` selects the full-matrix norm ratio described below.
+
+All four integrators print minimum pressure as `min_p` at the existing summary interval and final time, alongside maximum pressure and speed, using physical cells only. These are accepted cell-average pressures, not reconstructed face pressures or intermediate nonlinear iterates. A positive cell minimum does not prove no reconstructed face crossed the safeguard. Values between summary intervals are not reported by this diagnostic.
+
+For a controlled comparison, keep the mesh, tau, initial conditions, nonlinear method, tolerance and Jacobian interval fixed; change only the fallback. Use `save_every=1` to see pressure at every accepted time step. Default relaxation one does not guarantee FPI convergence for an arbitrary time step.
+
+Thermodynamic recovery and periodic Jacobian grouping are optimized internally; no new user settings are required. `jacobian_every` and all default numerical controls remain unchanged. See the root README for the two minimal recovery helpers and verification commands.
+
+## Choosing the nonlinear convergence check
+
+Set the shared option in main:
+
+```python
+convergence_check = "scaled"  # Current/default check.
+# convergence_check = "teacher"  # Literal full-matrix 2-norm ratio.
+```
+
+Main forwards it only to the implicit Euler/CN blocks. Both integrators pass it to their selected Newton/FPI routine. Explicit Euler and RK4 do not use a nonlinear stopping check. The parameter is also available in direct calls to all four nonlinear one-step functions, with default `"scaled"`.
+
+| Mode | Error calculation | Cells | Relaxation |
+| --- | --- | --- | --- |
+| `"scaled"` | Maximum over components/cells of abs(unrelaxed correction)/component scale | Physical cells | Applied damping does not directly reduce the measured correction |
+| `"teacher"` | `np.linalg.norm(q_next - q_m, 2) / np.linalg.norm(q_next, 2)` | Full state, including updated ghosts | Measures the actual applied/damped update |
+
+Both modes accept when `error < eps_tol` and print that selected error in the same progress line. The default scaled criterion is mathematically unchanged. Teacher mode uses the matrix spectral norm (largest singular value), matching MATLAB `norm(Q,2)` when Q is a matrix; it is neither a flattened Euclidean norm, a Frobenius norm nor a separate test per cell. The literal full-state expression is evaluated after boundary updates. If the teacher uses a vector or excludes ghosts before applying the expression, that would be a different comparison.
+
+A zero numerator and denominator is assigned error zero; a zero denominator with a nonzero numerator, or a nonfinite state/error, fails. For physical valid states the ordinary ratio is used without a denominator floor. Teacher mode has no component scaling and can be dominated by energy; a small relaxation factor can reduce its reported error. This option is provided for direct diagnostic comparisons.
+
+The same eps_tol does not have the same meaning in the two modes. Keep all other settings fixed when comparing their behaviour. Jacobian reuse, relaxation defaults, pressure fallback, the literal 5000 Pa threshold, min_p printing and data formats are unchanged.
+
+Run `python tests/check_convergence_options.py` from the project root to verify the literal ratio and ghost inclusion, damping, strict tolerance, default scaled behaviour, invalid choices and integration/history for both methods with both nonlinear solvers.

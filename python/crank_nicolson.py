@@ -8,7 +8,7 @@ from miscellaneous import conservation_check
 from nonlinear_solvers import fixed_point_CN, newton_CN
 
 
-def crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=100, eps_tol=1e-6, limit=1000, relax_factor=None, nonlinear_method="newton", eps_j=1e-6, q_reference=None, jacobian_every=3):
+def crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=100, eps_tol=1e-6, limit=1000, relax_factor=1.0, nonlinear_method="newton", eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
     """Integrate to final_time; shorten the last step when necessary.
 
     Newton is the default; set nonlinear_method="fpi" for fixed point.
@@ -22,11 +22,10 @@ def crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=1
     if not isinstance(limit, (int, np.integer)) or limit <= 0: raise ValueError("limit must be a positive integer.")
     if nonlinear_method not in ("newton", "fpi"): raise ValueError("Choose nonlinear_method='newton' or 'fpi'.")
 
-    if relax_factor is None:
-        relax_factor = 1.0 if nonlinear_method == "newton" else 0.25
-
     if not np.isfinite(relax_factor) or not 0 < relax_factor <= 1: raise ValueError("relax_factor must be in (0, 1].")
     if nonlinear_method == "newton" and (not np.isfinite(eps_j) or eps_j <= 0): raise ValueError("eps_j must be finite and positive.")
+
+    if convergence_check not in ("scaled", "teacher"): raise ValueError("convergence_check must be scaled or teacher.")
 
     iteration_label = "NWT" if nonlinear_method == "newton" else "FP"
 
@@ -54,10 +53,10 @@ def crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=1
         if not np.isfinite(step) or step <= 0 or t + step == t: raise ValueError("Invalid time step: time cannot advance.")
 
         if nonlinear_method == "newton":
-            q_current = newton_CN(q_current, step, domain, bc_settings, eps_tol=eps_tol, limit=limit, relax_factor=relax_factor, time=t, eps_j=eps_j, q_reference=q_reference, jacobian_every=jacobian_every)
+            q_current = newton_CN(q_current, step, domain, bc_settings, eps_tol=eps_tol, limit=limit, relax_factor=relax_factor, time=t, eps_j=eps_j, q_reference=q_reference, jacobian_every=jacobian_every, reconstruction=reconstruction, pressure_fallback=pressure_fallback, convergence_check=convergence_check)
 
         else:
-            q_current = fixed_point_CN(q_current, step, domain, bc_settings, eps_tol=eps_tol, limit=limit, relax_factor=relax_factor, time=t)
+            q_current = fixed_point_CN(q_current, step, domain, bc_settings, eps_tol=eps_tol, limit=limit, relax_factor=relax_factor, time=t, reconstruction=reconstruction, pressure_fallback=pressure_fallback, convergence_check=convergence_check)
 
         t = final_time if last_step else t + step
         counter += 1
@@ -72,10 +71,11 @@ def crank_nicolson(q_initial, domain, final_time, bc_settings, tau, save_every=1
             for name in primitives:
                 history["primitives"][name].append(primitives[name].copy())
 
+            min_p = np.min(primitives["p"][physical])
             max_p = np.max(primitives["p"][physical])
             max_speed = np.max(np.abs(primitives["u"][physical]))
 
-            print(f"\rN={counter} t={t:.3e} dt={step:.2e} pmax={max_p:.3e} |u|max={max_speed:.3e}".ljust(76), flush=True)
+            print(f"\rIteration: {counter} | t={t:.3e} | dt={step:.2e} | min_p={min_p:.3e} | max_p={max_p:.3e} | max_u={max_speed:.3e}", flush=True)
 
     history["times"] = np.array(history["times"])
 
