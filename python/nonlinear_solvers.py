@@ -5,8 +5,10 @@ from scipy.sparse import csc_matrix, eye
 from scipy.sparse.linalg import splu
 
 from conditions import apply_boundary_conditions
-from solver_functions import compute_residual, get_primitives
+from solver_functions import compute_residual, get_primitives, validate_state
 
+class NonlinearConvergenceError(RuntimeError):
+    """The current implicit-step attempt did not converge."""
 
 def reference_state(q, domain, q_reference=None):
     """Calculate component scales; automatic scales also normalise convergence.
@@ -88,7 +90,7 @@ def residual_jacobian(q, r, domain, bc_settings, reference, eps_j=1e-6, reconstr
 
             q_perturbed = apply_boundary_conditions(domain, q_perturbed, bc_settings["left"], "left")
             q_perturbed = apply_boundary_conditions(domain, q_perturbed, bc_settings["right"], "right")
-
+            validate_state(q_perturbed, domain)
             r_perturbed = compute_residual(q_perturbed, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
             residual_change = r_perturbed - r
 
@@ -115,7 +117,6 @@ def residual_jacobian(q, r, domain, bc_settings, reference, eps_j=1e-6, reconstr
 
 def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
     """Solve one backward Euler step using relaxed fixed-point iteration."""
-    if convergence_check not in ("scaled", "teacher"): raise ValueError("convergence_check must be scaled or teacher.")
     physical = domain["physical_ind"]
     n_cells = len(physical)
 
@@ -123,7 +124,7 @@ def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
-
+    validate_state(q_n, domain)
     # Initial guess for the new time level.
     q_m = q_n.copy()
     if convergence_check == "scaled":
@@ -133,10 +134,10 @@ def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1
         r_m = compute_residual(q_m, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
 
         # Form the unrelaxed correction before multiplying by relax_factor.
-        correction = q_n[:, physical] + tau*r_m - q_m[:, physical]
+        correction = q_n[:, physical] + tau*r_m - q_m[:, physical] 
         q_next = q_m.copy()
         q_next[:, physical] = q_m[:, physical] + relax_factor*correction
-
+        validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
@@ -158,7 +159,7 @@ def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1
 
         if not np.isfinite(error):
             print()
-            raise RuntimeError("Fixed-point iteration produced a non-finite error.")
+            raise NonlinearConvergenceError("Fixed-point iteration produced a non-finite error.")
 
         print(f"\rIE | t={time:.4e} | FP {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
 
@@ -168,7 +169,7 @@ def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1
         q_m = q_next
 
     print()
-    raise RuntimeError(f"Fixed-point iteration did not converge after {limit} iterations.")
+    raise NonlinearConvergenceError(f"Fixed-point iteration did not converge after {limit} iterations; last error={error:.3e}.")
 
 
 def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
@@ -181,6 +182,7 @@ def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
+    validate_state(q_n, domain)
     r_n = compute_residual(q_n, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
 
     # Initial guess for the new time level.
@@ -195,7 +197,7 @@ def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000
         correction = q_n[:, physical] + tau/2*(r_n + r_m) - q_m[:, physical]
         q_next = q_m.copy()
         q_next[:, physical] = q_m[:, physical] + relax_factor*correction
-
+        validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
@@ -217,7 +219,7 @@ def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000
 
         if not np.isfinite(error):
             print()
-            raise RuntimeError("Fixed-point iteration produced a non-finite error.")
+            raise NonlinearConvergenceError("Fixed-point iteration produced a non-finite error.")
 
         print(f"\rCN | t={time:.4e} | FP {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
 
@@ -227,7 +229,7 @@ def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000
         q_m = q_next
 
     print()
-    raise RuntimeError(f"Fixed-point iteration did not converge after {limit} iterations.")
+    raise NonlinearConvergenceError(f"Fixed-point iteration did not converge after {limit} iterations; last error={error:.3e}.")
 
 
 def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
@@ -243,6 +245,7 @@ def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, 
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
+    validate_state(q_n, domain)
 
     # Initial guess and reference scales.
     q_m = q_n.copy()
@@ -269,7 +272,7 @@ def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, 
 
         q_next = q_m.copy()
         q_next[:, physical] = q_m[:, physical] + relax_factor*correction
-
+        validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
@@ -291,7 +294,7 @@ def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, 
 
         if not np.isfinite(error):
             print()
-            raise RuntimeError("Newton iteration produced a non-finite error.")
+            raise NonlinearConvergenceError("Newton iteration produced a non-finite error.")
 
         print(f"\rIE | t={time:.4e} | NWT {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
 
@@ -301,7 +304,7 @@ def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, 
         q_m = q_next
 
     print()
-    raise RuntimeError(f"Newton iteration did not converge after {limit} iterations.")
+    raise NonlinearConvergenceError(f"Newton iteration did not converge after {limit} iterations.")
 
 
 def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
@@ -317,6 +320,7 @@ def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, rel
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
+    validate_state(q_n, domain)
     r_n = compute_residual(q_n, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
 
     # Initial guess and reference scales.
@@ -344,7 +348,7 @@ def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, rel
 
         q_next = q_m.copy()
         q_next[:, physical] = q_m[:, physical] + relax_factor*correction
-
+        validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
@@ -366,7 +370,7 @@ def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, rel
 
         if not np.isfinite(error):
             print()
-            raise RuntimeError("Newton iteration produced a non-finite error.")
+            raise NonlinearConvergenceError("Newton iteration produced a non-finite error.")
 
         print(f"\rCN | t={time:.4e} | NWT {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
 
@@ -376,4 +380,4 @@ def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, rel
         q_m = q_next
 
     print()
-    raise RuntimeError(f"Newton iteration did not converge after {limit} iterations.")
+    raise NonlinearConvergenceError(f"Fixed-point iteration did not converge after {limit} iterations; last error={error:.3e}.")

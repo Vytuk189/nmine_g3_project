@@ -2,6 +2,37 @@
 
 import numpy as np
 
+class InvalidStateError(ValueError):
+    """A conservative state is not thermodynamically admissible."""
+
+
+def validate_state(q, domain):
+    """Check physical cells without clipping or modifying their conservative values."""
+    for j in domain["physical_ind"]:
+        state = q[:, j]
+        reason = None
+
+        if not np.all(np.isfinite(state)):
+            reason = "non-finite conservative component"
+        elif state[0] <= 0 or state[1] <= 0:
+            reason = "partial masses must be positive"
+        elif not 0 < state[4] < 1:
+            reason = f"gas volume fraction must be in (0, 1), got {state[4]:.6g}"
+        else:
+            try:
+                # Direct EOS call: no clipping of masses or volume fraction.
+                with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                    pressure = sg_eos("p_common", q=state)
+
+                if not np.isfinite(pressure) or pressure <= 0:
+                    reason = f"pressure must be finite and positive, got {pressure:.6g} Pa"
+
+            except ValueError as error:
+                reason = str(error)
+
+        if reason is not None:
+            raise InvalidStateError(f"Cell {j}, x={domain['x_centres'][j]:.6g} m: {reason.rstrip('.')}.")
+
 
 def sg_eos(request, k=None, e=None, rho=None, p=None, temperature=None, q=None):
     """
@@ -215,7 +246,7 @@ def minmod(a, b):
 def muscl_reconstruction(q, domain, pressure_fallback="first_order"):
     """Reconstruct A*rho*u, then recover rho*u using the corresponding face area.
 
-    Other components are reconstructed directly. Keep the existing 5000 Pa
+    Other components are reconstructed directly. Keeps the existing 5000 Pa
     pressure threshold; choose first-order fallback or gradual reduction.
     """
     if pressure_fallback not in ("first_order", "gradual"): raise ValueError("pressure_fallback must be first_order or gradual.")

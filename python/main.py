@@ -18,7 +18,7 @@ run_simulation = True       # False: load an existing result folder and plot onl
 show_domain = True         # Close the domain plot to begin the computation.
 folder_name = "task15cnfpi"    # Existing names receive suffixes _1, _2, etc.
 load_folder = "task14cn"    # Used when run_simulation=False.
-solver_name = "crank_nicolson"  # explicit_euler, rk4, implicit_euler, crank_nicolson.
+solver_name = "implicit_euler"  # explicit_euler, rk4, implicit_euler, crank_nicolson.
 
 
 # DOMAIN
@@ -74,31 +74,39 @@ elif solver_name == "rk4":
     solver_options = {"cfl": cfl, "save_every": save_every}
 
 elif solver_name == "implicit_euler":
-    tau = 1e-5
+    tau = 1e-6
     save_every = 50
     eps_tol = 1e-6          # Tolerance for the selected convergence check.
-    limit = 500
+    limit = 200
+    min_tau = 1e-12
+    max_retries = 12
 
     nonlinear_method = "newton"  # Options: "newton" or "fpi".
     relax_factor = 1.0         # So far, FPI does not converge for higher values, even at smaller time steps!.
     eps_j = 1e-6
     q_reference = None
-    jacobian_every = 3          # Rebuild Jacobian only every few Newton iterations; 1 rebuilds every iteration.
+    jacobian_every = 10         # Rebuild Jacobian only every few Newton iterations; 1 rebuilds every iteration.
     solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every, "convergence_check": convergence_check}
+    solver_options["min_tau"] = min_tau
+    solver_options["max_retries"] = max_retries
 
 elif solver_name == "crank_nicolson":
-    tau = 1e-6
+    tau = 1e-5
     save_every = 50
     eps_tol = 1e-6          # Tolerance for the selected convergence check.
-    limit = 500
+    limit = 200
+    min_tau = 1e-12
+    max_retries = 12
 
     nonlinear_method = "newton"
     relax_factor = 1.0  #So far, FPI with relax_factor=1.0 works only for tau=1e-6, tau = 1e-5 does not converge!
     eps_j = 1e-6
     q_reference = None
-    jacobian_every = 3
+    jacobian_every = 10
 
     solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every, "convergence_check": convergence_check}
+    solver_options["min_tau"] = min_tau
+    solver_options["max_retries"] = max_retries
 else:
     raise ValueError(f"Unknown solver '{solver_name}'. Choose explicit_euler, rk4, implicit_euler or crank_nicolson.")
 
