@@ -4,7 +4,7 @@ import numpy as np
 
 
 def volume_calculator(area_rule, x_left, x_right, n=10000):
-    """get volumee of a cell using trapezoid calculation"""
+    """Integrate positive area [m²] over x_left < x_right using integer n > 0."""
     h = (x_right - x_left) / n
 
     total = 0.5*(area_rule(x_left) + area_rule(x_right))
@@ -27,12 +27,13 @@ def build_domain(m, node_density_rule, area_rule, n_cells, n_ghost):
     n_ghost            : int -> same number of ghost cells on both sides (0 = none)
                          (left, right) -> one count per side, e.g. (0, 1) = right side only
 
+    Use m[0] < m[1], positive integer n_cells, positive node density and area.
+    n_ghost is a nonnegative integer or pair. The solvers require >= 1 each side;
+    reflective ghost counts must not exceed the number of physical cells.
     Returns a dictionary
     """
     if np.isscalar(n_ghost): n_ghost_left = n_ghost_right = int(n_ghost)
-    elif len(n_ghost) == 2: n_ghost_left, n_ghost_right = int(n_ghost[0]), int(n_ghost[1])
-    else: raise ValueError("N_ghost must be an int or a (left, right) pair.")
-    if n_ghost_left < 0 or n_ghost_right < 0: raise ValueError("Ghost cell counts cannot be negative.")
+    else: n_ghost_left, n_ghost_right = int(n_ghost[0]), int(n_ghost[1])
 
     x_left, x_right = m[0], m[1]
     

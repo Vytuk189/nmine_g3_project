@@ -39,9 +39,9 @@ def fixed_state(side):
 def initialize_state(domain, area_rule, p_rule, t_g_rule, t_l_rule, u_rule, alpha_g_rule, n=100):
     """
     Initialize conservative cell averages using composite midpoint quadrature.
-    Ghost cells copy the nearest physical cell.
+    Ghost cells copy the nearest physical cell. n is a positive integer.
+    Rules return SI scalars; temperatures/pressure > 0 and 0 < alpha_g < 1.
     """
-    if not isinstance(n, (int, np.integer)) or n <= 0: raise ValueError("n must be a positive integer.")
     q = np.zeros((5, domain["n_total"]))
 
     for j in domain["physical_ind"]:
@@ -67,17 +67,14 @@ def initialize_state(domain, area_rule, p_rule, t_g_rule, t_l_rule, u_rule, alph
 
 def apply_boundary_conditions(domain, q, case, side, check=False, rtol=1e-3):
     """
+    q is (5, n_total); side is "left"/"right"; use the case names below.
+    At least one ghost per side, and no more reflective ghosts than physical cells.
+    check=True retains the optional fixed-boundary/initial-state diagnostic.
     fixed: fill ghosts with fixed_state(side); optionally check the initial edge state.
     zerograd: all ghosts copy the nearest physical cell.
     periodic: ghosts copy successive physical cells from the opposite side.
     reflective: mirror successive physical cells and reverse momentum.
     """
-    if side not in ("left", "right"):
-        raise ValueError(f"Unknown side '{side}'.")
-
-    if case not in ("fixed", "zerograd", "reflective", "periodic"):
-        raise ValueError(f"Unknown boundary case '{case}'.")
-
     physical = domain["physical_ind"]
 
     if side == "left":
@@ -87,9 +84,6 @@ def apply_boundary_conditions(domain, q, case, side, check=False, rtol=1e-3):
         edge = physical[-1]
         ghosts = domain["ghost_right_ind"]       # Nearest ghost first
 
-    if len(ghosts) == 0:
-        raise ValueError(f"'{case}' requires at least one ghost cell on the {side} side.")
-
     if case == "fixed":
         q_bc = fixed_state(side)
         if check and not np.allclose(q_bc, q[:, edge], rtol=rtol, atol=0):
@@ -97,9 +91,6 @@ def apply_boundary_conditions(domain, q, case, side, check=False, rtol=1e-3):
         for ghost in ghosts:
             q[:, ghost] = q_bc
         return q
-
-    if case == "reflective" and len(ghosts) > len(physical):
-        raise ValueError("Not enough physical cells to mirror all ghost cells.")
 
     for i, ghost in enumerate(ghosts):
         if case == "zerograd":

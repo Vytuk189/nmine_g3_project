@@ -5,7 +5,13 @@ from pathlib import Path
 
 
 def save_primitives(history, domain, folder_name):
-    """Save primitive history for physical cells into data/folder_name."""
+    """Save full-grid history using a bare folder_name under ./data.
+
+    history["primitives"][name] has shape (saved_times, n_total), including ghosts;
+    domain supplies physical indices. Each TXT row is a time, each column a cell.
+    Optional implicit-step diagnostics are saved separately in diagnostics.npz.
+    Existing folders get a numeric suffix. Return the actual folder Path.
+    """
     data_folder = Path.cwd() / "data"
     data_folder.mkdir(exist_ok=True)
 
@@ -32,12 +38,20 @@ def save_primitives(history, domain, folder_name):
             fmt="%.18e"
         )
 
+    if "diagnostics" in history:
+        np.savez(folder / "diagnostics.npz", **history["diagnostics"])
+
     print(f"Saved results to: {folder}")
     return folder
 
 
 def load_primitives(folder_name):
-    """Load from a folder name inside data, or from a folder path."""
+    """Load an existing bare name under ./data, or an explicit folder path.
+
+    Return (physical x_centres, history). Diagnostics, when present, have their
+    own time array: one row per accepted step, rather than per saved snapshot.
+    Old folders without diagnostics remain readable.
+    """
     folder = Path(folder_name).expanduser()
 
     # A bare name refers to a folder inside the current data folder.
@@ -58,11 +72,16 @@ def load_primitives(folder_name):
 
         values = np.loadtxt(file, ndmin=2)
 
+        # Keep this check: it detects damaged/inconsistent saved numerical data.
         if values.shape != (len(times), len(x_centres)):
             raise ValueError(f"Unexpected data shape in {file.name}.")
 
         legacy_names = {"Tg": "t_g", "Tl": "t_l", "ag": "alpha_g", "al": "alpha_l", "E": "e_total", "K": "k"}
         name = legacy_names.get(file.stem, file.stem)
         history["primitives"][name] = values
+
+    if (folder / "diagnostics.npz").exists():
+        with np.load(folder / "diagnostics.npz") as saved:
+            history["diagnostics"] = {name: saved[name].copy() for name in saved.files}
 
     return x_centres, history

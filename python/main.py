@@ -18,7 +18,7 @@ run_simulation = True       # False: load an existing result folder and plot onl
 show_domain = True         # Close the domain plot to begin the computation.
 folder_name = "task15cnfpi"    # Existing names receive suffixes _1, _2, etc.
 load_folder = "task14cn"    # Used when run_simulation=False.
-solver_name = "implicit_euler"  # explicit_euler, rk4, implicit_euler, crank_nicolson.
+solver_name = "crank_nicolson"  # explicit_euler, rk4, implicit_euler, crank_nicolson.
 
 
 # DOMAIN
@@ -51,10 +51,14 @@ bc_settings = {"left": "reflective", "right": "reflective"}
 
 
 # SOLVER SETTINGS
+# Use the exact option strings below. Counts (save_every, limit, Jacobian/growth
+# intervals) must be positive integers. tau, cfl, eps_tol and eps_j must be positive.
+# min_tau must be <= tau; max_retries is a nonnegative integer; final_time >= 0.
+# Q has shape (5, total cells); build_domain supplies the expected indexing.
 # save_every counts completed physical time steps, not nonlinear iterations.
 # The initial and final states are always included in history.
 reconstruction = "muscl"  # Options: "muscl" or "first_order"; applies to all solvers.
-pressure_fallback = "gradual"  # MUSCL pressure fallback: "first_order" or "gradual".
+pressure_fallback = "first_order"  # MUSCL pressure fallback: "first_order" or "gradual".
 # Both use the existing hard-coded 5000 Pa threshold.
 # This setting has no effect when reconstruction="first_order".
 convergence_check = "teacher"  # Implicit solvers only: "scaled" or "teacher".
@@ -76,39 +80,59 @@ elif solver_name == "rk4":
 elif solver_name == "implicit_euler":
     tau = 1e-6
     save_every = 50
-    eps_tol = 1e-6          # Tolerance for the selected convergence check.
+    eps_tol = 1e-16          # Tolerance for the selected convergence check.
     limit = 200
-    min_tau = 1e-12
-    max_retries = 12
+    min_tau = 1e-12        # Smallest permitted step after a failed attempt.
+    max_retries = 12       # Maximum halvings for one physical time step.
 
     nonlinear_method = "newton"  # Options: "newton" or "fpi".
-    relax_factor = 1.0         # So far, FPI does not converge for higher values, even at smaller time steps!.
+    relax_factor = 1.0      # (0, 1]; use a smaller value to damp nonlinear updates.
     eps_j = 1e-6
-    q_reference = None
-    jacobian_every = 10         # Rebuild Jacobian only every few Newton iterations; 1 rebuilds every iteration.
+    q_reference = None     # Or five positive scales [gas mass, liquid mass, momentum, energy, alpha].
+    jacobian_every = 20     # Inner Newton iterations: rebuild on 1, 11, 21, ...
+    jacobian_step_every = 10 # Outer steps: 1 refreshes each step; e.g. 5 reuses between steps 1, 6, 11, ...
+    # Both Jacobian settings affect Newton only. Inner rebuilds still apply.
+    # New dt or a failed attempt forces a fresh matrix regardless of the interval.
+    adaptive_tau = True   # Default: once halved, retain the smaller step.
+    # True: recover toward the original tau after consecutive easy solves.
+    growth_after = 3        # Positive integer: required consecutive easy steps.
+    growth_iterations = 8   # Positive integer: an easy solve uses at most this many iterations.
+    growth_rate = 0.5       # (0, 1): recent error contraction factor must be <= this.
+    # Recovery controls nonlinear difficulty, not time-discretisation accuracy.
+
     solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every, "convergence_check": convergence_check}
     solver_options["min_tau"] = min_tau
     solver_options["max_retries"] = max_retries
+    solver_options.update(jacobian_step_every=jacobian_step_every, adaptive_tau=adaptive_tau, growth_after=growth_after, growth_iterations=growth_iterations, growth_rate=growth_rate)
 
 elif solver_name == "crank_nicolson":
-    tau = 1e-5
+    tau = 1e-6
     save_every = 50
-    eps_tol = 1e-6          # Tolerance for the selected convergence check.
+    eps_tol = 1e-16          # Tolerance for the selected convergence check.
     limit = 200
-    min_tau = 1e-12
-    max_retries = 12
+    min_tau = 1e-12        # Smallest permitted step after a failed attempt.
+    max_retries = 12       # Maximum halvings for one physical time step.
 
     nonlinear_method = "newton"
-    relax_factor = 1.0  #So far, FPI with relax_factor=1.0 works only for tau=1e-6, tau = 1e-5 does not converge!
+    relax_factor = 1.0      # (0, 1]; full updates by default.
     eps_j = 1e-6
-    q_reference = None
-    jacobian_every = 10
+    q_reference = None     # Or five positive scales [gas mass, liquid mass, momentum, energy, alpha].
+    jacobian_every = 20     # Inner Newton iterations: rebuild on 1, 11, 21, ...
+
+    jacobian_step_every = 10 # Outer steps: 1 refreshes each step; e.g. 5 reuses between steps 1, 6, 11, ...
+    # Both Jacobian settings affect Newton only. Inner rebuilds still apply.
+    # New dt or a failed attempt forces a fresh matrix regardless of the interval.
+    adaptive_tau = True   # Default: once halved, retain the smaller step.
+    # True: recover toward the original tau after consecutive easy solves.
+    growth_after = 3        # Positive integer: required consecutive easy steps.
+    growth_iterations = 8   # Positive integer: an easy solve uses at most this many iterations.
+    growth_rate = 0.5       # (0, 1): recent error contraction factor must be <= this.
+    # Recovery controls nonlinear difficulty, not time-discretisation accuracy.
 
     solver_options = {"tau": tau, "save_every": save_every, "eps_tol": eps_tol, "limit": limit, "relax_factor": relax_factor, "nonlinear_method": nonlinear_method, "eps_j": eps_j, "q_reference": q_reference, "jacobian_every": jacobian_every, "convergence_check": convergence_check}
     solver_options["min_tau"] = min_tau
     solver_options["max_retries"] = max_retries
-else:
-    raise ValueError(f"Unknown solver '{solver_name}'. Choose explicit_euler, rk4, implicit_euler or crank_nicolson.")
+    solver_options.update(jacobian_step_every=jacobian_step_every, adaptive_tau=adaptive_tau, growth_after=growth_after, growth_iterations=growth_iterations, growth_rate=growth_rate)
 
 
 solver_options["reconstruction"] = reconstruction

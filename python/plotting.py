@@ -33,14 +33,16 @@ def plot_domain(domain, area_rule):
 
 
 def simple_plot(primitives, cell_centres, what_primitive_to_plot, time, xlim=None):
+    """Plot saved history at the nearest stored time (seconds).
+
+    cell_centres must match the columns of every primitive array. Pass one name
+    (e.g. "p") or exactly two names (e.g. ["u", "c"]). xlim is None or [xL, xR].
+    """
     # Accept either one identifier or a list/tuple of two.
     if isinstance(what_primitive_to_plot, str):
         names = [what_primitive_to_plot]
     else:
         names = list(what_primitive_to_plot)
-
-    if len(names) not in (1, 2):
-        raise ValueError("Pass one or two primitive identifiers.")
 
     times = primitives["times"]
     k = np.argmin(np.abs(times - time))

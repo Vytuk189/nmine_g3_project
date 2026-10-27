@@ -13,10 +13,10 @@ def get_time_step(u, c, dx, cfl=0.5):
 
 def rk4(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100, reconstruction="muscl", pressure_fallback="first_order"):
 
-    if not isinstance(save_every, (int, np.integer)) or save_every <= 0: raise ValueError("save_every must be a positive integer.")
-    if not np.isfinite(final_time) or final_time < 0: raise ValueError("final_time must be finite and nonnegative.")
-    if not np.isfinite(cfl) or cfl <= 0: raise ValueError("cfl must be finite and positive.")
 
+    # final_time >= 0, cfl > 0 and save_every is a positive integer.
+    # q_initial: (5, n_total), with at least one ghost per side.
+    # reconstruction: "muscl"/"first_order"; fallback: "first_order"/"gradual".
     t = 0.0
     counter = 0
     q_current = q_initial.copy()

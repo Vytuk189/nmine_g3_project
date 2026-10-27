@@ -39,7 +39,9 @@ def sg_eos(request, k=None, e=None, rho=None, p=None, temperature=None, q=None):
     Get a thermodynamic property using the stiffened-gas EOS.
 
     Phase: k=1 for gas, k=2 for liquid.
-    All inputs must use SI units.
+    All inputs must use SI units. request is one of p_common, p_erho, rho_pT,
+    e_prho, T_prho, h_prho, c_prho; supply the quantities named after the underscore.
+    p_common takes a length-five conservative q; other requests use k=1 or 2.
 
     Checks thermodynamic conditions:
         rho > 0, p + p_inf > 0, temperature > 0.
@@ -90,8 +92,6 @@ def sg_eos(request, k=None, e=None, rho=None, p=None, temperature=None, q=None):
         # Check density before recovering pressure and temperature
         if not np.isfinite(rho) or rho <= 0: raise ValueError(f"Phase {k}: density must be positive.")
         p = (gamma - 1)*rho*(e - q) - gamma*p_inf
-
-    elif request not in ("e_prho", "T_prho", "h_prho", "c_prho"): raise ValueError("Unknown request.")
 
     # Check the resulting thermodynamic state
     if not np.isfinite(rho) or rho <= 0: raise ValueError(f"Phase {k}: density must be positive.")
@@ -249,7 +249,6 @@ def muscl_reconstruction(q, domain, pressure_fallback="first_order"):
     Other components are reconstructed directly. Keeps the existing 5000 Pa
     pressure threshold; choose first-order fallback or gradual reduction.
     """
-    if pressure_fallback not in ("first_order", "gradual"): raise ValueError("pressure_fallback must be first_order or gradual.")
     x = domain['x_centres']
     faces = domain['x_faces']
     sigma = np.zeros_like(q, dtype=float)
@@ -312,24 +311,18 @@ def compute_residual(q, domain, reconstruction="muscl", pressure_fallback="first
     Output rate: shape (5, n_cells), physical cells only.
     Boundary conditions must be applied before calling this function.
     All boundary types, including fixed states, require at least one ghost cell
-    on each side. reconstruction selects MUSCL or piecewise-constant states.
+    on each side. reconstruction is "muscl" or "first_order".
+    pressure_fallback is "first_order" or "gradual" (used only by MUSCL).
     """
 
     q = np.asarray(q, dtype=float)
-    if q.shape != (5, domain["n_total"]): raise ValueError("Q must have shape (5, N_total).")
 
     physical_ind, area, volumes, n_cells = domain["physical_ind"], domain["area_faces"], domain["volumes"], domain["n_cells"]
-    ng_left, ng_right = domain["n_ghost_left"], domain["n_ghost_right"]
-    if ng_left < 1 or ng_right < 1: raise ValueError("All boundaries require at least one ghost cell per side.")
-
-    if pressure_fallback not in ("first_order", "gradual"): raise ValueError("pressure_fallback must be first_order or gradual.")
 
     if reconstruction == "muscl":
         q_left, q_right = muscl_reconstruction(q, domain, pressure_fallback=pressure_fallback)
     elif reconstruction == "first_order":
         q_left, q_right = q.copy(), q.copy()
-    else:
-        raise ValueError("reconstruction must be 'muscl' or 'first_order'.")
 
     first_face = physical_ind[0]
     flux = np.zeros((5, n_cells + 1))

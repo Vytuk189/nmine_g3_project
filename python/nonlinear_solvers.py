@@ -115,269 +115,264 @@ def residual_jacobian(q, r, domain, bc_settings, reference, eps_j=1e-6, reconstr
     return csc_matrix((values, (rows, columns)), shape=(5*n_cells, 5*n_cells))
 
 
-def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
-    """Solve one backward Euler step using relaxed fixed-point iteration."""
-    physical = domain["physical_ind"]
-    n_cells = len(physical)
+def convergence_error(q_next, q_m, correction, scale, convergence_check):
+    """Return the existing stopping error, without changing either definition.
 
-    # Known state at the beginning of the time step.
+    scaled: largest abs(unrelaxed correction)/component scale in physical cells.
+    teacher: matrix 2-norm of the applied update divided by that of the new state,
+    including ghosts. This is the spectral norm, not the flattened vector norm.
+    """
+    if convergence_check == "scaled":
+        return np.max(np.abs(correction)/scale[:, None])
+    difference = np.linalg.norm(q_next - q_m, 2)
+    magnitude = np.linalg.norm(q_next, 2)
+    return difference/magnitude if magnitude > 0 else (0.0 if difference == 0 else np.inf)
+
+
+def update_info(info, errors):
+    """Record iteration count, error and recent error contraction factor.
+
+    rate is the geometric mean of up to three successive error ratios.
+    Below one means shrinking errors; above one means growing errors.
+    One iteration has no measured ratio (NaN). A final exact zero gives rate=0.
+    This is an observed diagnostic, not the formal order of Newton convergence.
+    """
+    recent = errors[-4:]
+    ratios = [new/old for old, new in zip(recent[:-1], recent[1:]) if old > 0]
+    rate = np.exp(np.mean(np.log(ratios))) if ratios and min(ratios) > 0 else (0.0 if ratios else np.nan)
+    info.update(iterations=len(errors), error=errors[-1], rate=rate)
+
+
+def fixed_point_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled", info=None):
+    """Solve one backward Euler step; return full Q including updated ghosts.
+
+    tau and eps_tol are positive; limit is a positive integer; 0 < relax_factor <= 1.
+    Choose convergence_check="scaled" or "teacher", reconstruction="muscl" or
+    "first_order", and pressure_fallback="first_order" or "gradual".
+    Optional info={} receives iterations, error, rate and Jacobian build count.
+    time labels progress only; it does not enter the equation.
+    """
+    physical = domain["physical_ind"]
+    info = {} if info is None else info
+    info.clear()
+    info["jacobian_builds"] = 0
+    errors = []
+
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
     validate_state(q_n, domain)
-    # Initial guess for the new time level.
     q_m = q_n.copy()
-    if convergence_check == "scaled":
-        scale = reference_state(q_n, domain)
+    scale = reference_state(q_n, domain) if convergence_check == "scaled" else None
 
     for counter in range(1, limit + 1):
+        # Always evaluate the CURRENT residual, even when reusing a Jacobian.
         r_m = compute_residual(q_m, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
-
-        # Form the unrelaxed correction before multiplying by relax_factor.
-        correction = q_n[:, physical] + tau*r_m - q_m[:, physical] 
+        # The convergence test in scaled mode uses this UNRELAXED correction.
+        correction = q_n[:, physical] + tau*r_m - q_m[:, physical]
         q_next = q_m.copy()
-        q_next[:, physical] = q_m[:, physical] + relax_factor*correction
+        q_next[:, physical] += relax_factor*correction
         validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
-        if convergence_check == "scaled":
-            # Worst component-scaled UNRELAXED correction over physical cells.
-            cell_errors = np.zeros(n_cells)
-            for i in range(n_cells):
-                cell_errors[i] = np.max(np.abs(correction[:, i])/scale)
-            error = np.max(cell_errors)
-        else:
-            # MATLAB norm(Q, 2): matrix spectral norm, including updated ghosts.
-            # Use the applied update, so relaxation affects this stopping test.
-            if np.all(np.isfinite(q_next)) and np.all(np.isfinite(q_m)):
-                difference = np.linalg.norm(q_next - q_m, 2)
-                magnitude = np.linalg.norm(q_next, 2)
-                error = difference/magnitude if magnitude > 0 else (0.0 if difference == 0 else np.inf)
-            else:
-                error = np.inf
-
+        error = convergence_error(q_next, q_m, correction, scale, convergence_check)
         if not np.isfinite(error):
-            print()
-            raise NonlinearConvergenceError("Fixed-point iteration produced a non-finite error.")
-
-        print(f"\rIE | t={time:.4e} | FP {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
+            raise NonlinearConvergenceError("Nonlinear iteration produced a non-finite error.")
+        errors.append(error)
+        update_info(info, errors)
+        print(f"\rIE t={time:.3e} | FP {counter}/{limit} | err={error:.2e} | r={info['rate']:.2g}".ljust(76), end="", flush=True)
 
         if error < eps_tol:
             return q_next
-
         q_m = q_next
 
-    print()
     raise NonlinearConvergenceError(f"Fixed-point iteration did not converge after {limit} iterations; last error={error:.3e}.")
 
 
-def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
-    """Solve one Crank-Nicolson step using relaxed fixed-point iteration."""
-    if convergence_check not in ("scaled", "teacher"): raise ValueError("convergence_check must be scaled or teacher.")
-    physical = domain["physical_ind"]
-    n_cells = len(physical)
+def fixed_point_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled", info=None):
+    """Solve one Crank-Nicolson step; return full Q including updated ghosts.
 
-    # Known state and residual at the beginning of the time step.
+    tau and eps_tol are positive; limit is a positive integer; 0 < relax_factor <= 1.
+    Choose convergence_check="scaled" or "teacher", reconstruction="muscl" or
+    "first_order", and pressure_fallback="first_order" or "gradual".
+    Optional info={} receives iterations, error, rate and Jacobian build count.
+    time labels progress only; it does not enter the equation.
+    """
+    physical = domain["physical_ind"]
+    info = {} if info is None else info
+    info.clear()
+    info["jacobian_builds"] = 0
+    errors = []
+
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
     validate_state(q_n, domain)
     r_n = compute_residual(q_n, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
-
-    # Initial guess for the new time level.
     q_m = q_n.copy()
-    if convergence_check == "scaled":
-        scale = reference_state(q_n, domain)
+    scale = reference_state(q_n, domain) if convergence_check == "scaled" else None
 
     for counter in range(1, limit + 1):
+        # Always evaluate the CURRENT residual, even when reusing a Jacobian.
         r_m = compute_residual(q_m, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
-
-        # Form the unrelaxed correction before multiplying by relax_factor.
+        # The convergence test in scaled mode uses this UNRELAXED correction.
         correction = q_n[:, physical] + tau/2*(r_n + r_m) - q_m[:, physical]
         q_next = q_m.copy()
-        q_next[:, physical] = q_m[:, physical] + relax_factor*correction
+        q_next[:, physical] += relax_factor*correction
         validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
-        if convergence_check == "scaled":
-            # Worst component-scaled UNRELAXED correction over physical cells.
-            cell_errors = np.zeros(n_cells)
-            for i in range(n_cells):
-                cell_errors[i] = np.max(np.abs(correction[:, i])/scale)
-            error = np.max(cell_errors)
-        else:
-            # MATLAB norm(Q, 2): matrix spectral norm, including updated ghosts.
-            # Use the applied update, so relaxation affects this stopping test.
-            if np.all(np.isfinite(q_next)) and np.all(np.isfinite(q_m)):
-                difference = np.linalg.norm(q_next - q_m, 2)
-                magnitude = np.linalg.norm(q_next, 2)
-                error = difference/magnitude if magnitude > 0 else (0.0 if difference == 0 else np.inf)
-            else:
-                error = np.inf
-
+        error = convergence_error(q_next, q_m, correction, scale, convergence_check)
         if not np.isfinite(error):
-            print()
-            raise NonlinearConvergenceError("Fixed-point iteration produced a non-finite error.")
-
-        print(f"\rCN | t={time:.4e} | FP {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
+            raise NonlinearConvergenceError("Nonlinear iteration produced a non-finite error.")
+        errors.append(error)
+        update_info(info, errors)
+        print(f"\rCN t={time:.3e} | FP {counter}/{limit} | err={error:.2e} | r={info['rate']:.2g}".ljust(76), end="", flush=True)
 
         if error < eps_tol:
             return q_next
-
         q_m = q_next
 
-    print()
     raise NonlinearConvergenceError(f"Fixed-point iteration did not converge after {limit} iterations; last error={error:.3e}.")
 
 
-def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
-    """Solve one backward Euler step, periodically rebuilding the Jacobian."""
-    if convergence_check not in ("scaled", "teacher"): raise ValueError("convergence_check must be scaled or teacher.")
-    if not isinstance(jacobian_every, (int, np.integer)) or jacobian_every <= 0:
-        raise ValueError("jacobian_every must be a positive integer.")
+def newton_euler(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled", info=None, jacobian_cache=None):
+    """Solve one backward Euler step; return full Q including updated ghosts.
 
+    tau and eps_tol are positive; limit is a positive integer; 0 < relax_factor <= 1.
+    Choose convergence_check="scaled" or "teacher", reconstruction="muscl" or
+    "first_order", and pressure_fallback="first_order" or "gradual".
+    Optional info={} receives iterations, error, rate and Jacobian build count.
+    time labels progress only; it does not enter the equation.
+    jacobian_every is a positive integer: rebuild inside the solve on iterations
+    1, 1+jacobian_every, ...; iteration 1 can reuse the outer loop's cached matrix.
+    eps_j > 0 controls finite differences; q_reference is None or five positive
+    scales, ordered like Q. Cache belongs to one run/method/mesh only; the outer
+    loop clears it on scheduled refreshes, failures and time-step changes.
+    """
     physical = domain["physical_ind"]
     n_cells = len(physical)
+    info = {} if info is None else info
+    info.clear()
+    info["jacobian_builds"] = 0
+    errors = []
 
-    # Known state at the beginning of the time step.
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
     validate_state(q_n, domain)
-
-    # Initial guess and reference scales.
     q_m = q_n.copy()
-    if convergence_check == "scaled":
-        scale = reference_state(q_n, domain)
+    scale = reference_state(q_n, domain) if convergence_check == "scaled" else None
     reference = reference_state(q_n, domain, q_reference)
+    cache = {} if jacobian_cache is None else jacobian_cache
+    if cache.get("tau") != tau or cache.get("method") != "IE":
+        cache.clear()  # I - tau*J_R (or I - tau/2*J_R) changed.
 
     for counter in range(1, limit + 1):
-        # Recalculate the residual and equation defect at EVERY iteration.
+        # Always evaluate the CURRENT residual, even when reusing a Jacobian.
         r_m = compute_residual(q_m, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
         g_m = q_m[:, physical] - q_n[:, physical] - tau*r_m
 
-        # Rebuild on iterations 1, 1+jacobian_every, 1+2*jacobian_every, ...
-        if (counter - 1) % jacobian_every == 0:
+        if "factorisation" not in cache or (counter > 1 and (counter - 1) % jacobian_every == 0):
             jacobian_r = residual_jacobian(q_m, r_m, domain, bc_settings, reference, eps_j, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
             jacobian_g = eye(5*n_cells, format="csc") - tau*jacobian_r
+            try:
+                cache["factorisation"] = splu(jacobian_g)
+            except RuntimeError as error:
+                raise NonlinearConvergenceError("Newton matrix factorisation failed.") from error
+            cache.update(tau=tau, method="IE")
+            info["jacobian_builds"] += 1
 
-            # Store the factorisation until the next Jacobian update.
-            factorisation = splu(jacobian_g)
-
-        # Solve using the current defect and the stored factorisation.
-        correction = factorisation.solve(-g_m.flatten(order="F"))
+        correction = cache["factorisation"].solve(-g_m.flatten(order="F"))
         correction = correction.reshape((5, n_cells), order="F")
-
         q_next = q_m.copy()
-        q_next[:, physical] = q_m[:, physical] + relax_factor*correction
+        q_next[:, physical] += relax_factor*correction
         validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
-        if convergence_check == "scaled":
-            # Worst component-scaled UNRELAXED correction over physical cells.
-            cell_errors = np.zeros(n_cells)
-            for i in range(n_cells):
-                cell_errors[i] = np.max(np.abs(correction[:, i])/scale)
-            error = np.max(cell_errors)
-        else:
-            # MATLAB norm(Q, 2): matrix spectral norm, including updated ghosts.
-            # Use the applied update, so relaxation affects this stopping test.
-            if np.all(np.isfinite(q_next)) and np.all(np.isfinite(q_m)):
-                difference = np.linalg.norm(q_next - q_m, 2)
-                magnitude = np.linalg.norm(q_next, 2)
-                error = difference/magnitude if magnitude > 0 else (0.0 if difference == 0 else np.inf)
-            else:
-                error = np.inf
-
+        error = convergence_error(q_next, q_m, correction, scale, convergence_check)
         if not np.isfinite(error):
-            print()
-            raise NonlinearConvergenceError("Newton iteration produced a non-finite error.")
-
-        print(f"\rIE | t={time:.4e} | NWT {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
+            raise NonlinearConvergenceError("Nonlinear iteration produced a non-finite error.")
+        errors.append(error)
+        update_info(info, errors)
+        print(f"\rIE t={time:.3e} | NWT {counter}/{limit} | err={error:.2e} | r={info['rate']:.2g}".ljust(76), end="", flush=True)
 
         if error < eps_tol:
             return q_next
-
         q_m = q_next
 
-    print()
-    raise NonlinearConvergenceError(f"Newton iteration did not converge after {limit} iterations.")
+    raise NonlinearConvergenceError(f"Newton iteration did not converge after {limit} iterations; last error={error:.3e}.")
 
 
-def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled"):
-    """Solve one Crank-Nicolson step, periodically rebuilding the Jacobian."""
-    if convergence_check not in ("scaled", "teacher"): raise ValueError("convergence_check must be scaled or teacher.")
-    if not isinstance(jacobian_every, (int, np.integer)) or jacobian_every <= 0:
-        raise ValueError("jacobian_every must be a positive integer.")
+def newton_CN(q_initial, tau, domain, bc_settings, eps_tol=1e-6, limit=1000, relax_factor=1.0, time=0.0, eps_j=1e-6, q_reference=None, jacobian_every=3, reconstruction="muscl", pressure_fallback="first_order", convergence_check="scaled", info=None, jacobian_cache=None):
+    """Solve one Crank-Nicolson step; return full Q including updated ghosts.
 
+    tau and eps_tol are positive; limit is a positive integer; 0 < relax_factor <= 1.
+    Choose convergence_check="scaled" or "teacher", reconstruction="muscl" or
+    "first_order", and pressure_fallback="first_order" or "gradual".
+    Optional info={} receives iterations, error, rate and Jacobian build count.
+    time labels progress only; it does not enter the equation.
+    jacobian_every is a positive integer: rebuild inside the solve on iterations
+    1, 1+jacobian_every, ...; iteration 1 can reuse the outer loop's cached matrix.
+    eps_j > 0 controls finite differences; q_reference is None or five positive
+    scales, ordered like Q. Cache belongs to one run/method/mesh only; the outer
+    loop clears it on scheduled refreshes, failures and time-step changes.
+    """
     physical = domain["physical_ind"]
     n_cells = len(physical)
+    info = {} if info is None else info
+    info.clear()
+    info["jacobian_builds"] = 0
+    errors = []
 
-    # Known state and residual at the beginning of the time step.
     q_n = np.array(q_initial, dtype=float, copy=True)
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["left"], "left")
     q_n = apply_boundary_conditions(domain, q_n, bc_settings["right"], "right")
     validate_state(q_n, domain)
     r_n = compute_residual(q_n, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
-
-    # Initial guess and reference scales.
     q_m = q_n.copy()
-    if convergence_check == "scaled":
-        scale = reference_state(q_n, domain)
+    scale = reference_state(q_n, domain) if convergence_check == "scaled" else None
     reference = reference_state(q_n, domain, q_reference)
+    cache = {} if jacobian_cache is None else jacobian_cache
+    if cache.get("tau") != tau or cache.get("method") != "CN":
+        cache.clear()  # I - tau*J_R (or I - tau/2*J_R) changed.
 
     for counter in range(1, limit + 1):
-        # Recalculate the residual and equation defect at EVERY iteration.
+        # Always evaluate the CURRENT residual, even when reusing a Jacobian.
         r_m = compute_residual(q_m, domain, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
         g_m = q_m[:, physical] - q_n[:, physical] - tau/2*(r_n + r_m)
 
-        # Rebuild on iterations 1, 1+jacobian_every, 1+2*jacobian_every, ...
-        if (counter - 1) % jacobian_every == 0:
+        if "factorisation" not in cache or (counter > 1 and (counter - 1) % jacobian_every == 0):
             jacobian_r = residual_jacobian(q_m, r_m, domain, bc_settings, reference, eps_j, reconstruction=reconstruction, pressure_fallback=pressure_fallback)
             jacobian_g = eye(5*n_cells, format="csc") - tau/2*jacobian_r
+            try:
+                cache["factorisation"] = splu(jacobian_g)
+            except RuntimeError as error:
+                raise NonlinearConvergenceError("Newton matrix factorisation failed.") from error
+            cache.update(tau=tau, method="CN")
+            info["jacobian_builds"] += 1
 
-            # Store the factorisation until the next Jacobian update.
-            factorisation = splu(jacobian_g)
-
-        # Solve using the current defect and the stored factorisation.
-        correction = factorisation.solve(-g_m.flatten(order="F"))
+        correction = cache["factorisation"].solve(-g_m.flatten(order="F"))
         correction = correction.reshape((5, n_cells), order="F")
-
         q_next = q_m.copy()
-        q_next[:, physical] = q_m[:, physical] + relax_factor*correction
+        q_next[:, physical] += relax_factor*correction
         validate_state(q_next, domain)
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["left"], "left")
         q_next = apply_boundary_conditions(domain, q_next, bc_settings["right"], "right")
 
-        if convergence_check == "scaled":
-            # Worst component-scaled UNRELAXED correction over physical cells.
-            cell_errors = np.zeros(n_cells)
-            for i in range(n_cells):
-                cell_errors[i] = np.max(np.abs(correction[:, i])/scale)
-            error = np.max(cell_errors)
-        else:
-            # MATLAB norm(Q, 2): matrix spectral norm, including updated ghosts.
-            # Use the applied update, so relaxation affects this stopping test.
-            if np.all(np.isfinite(q_next)) and np.all(np.isfinite(q_m)):
-                difference = np.linalg.norm(q_next - q_m, 2)
-                magnitude = np.linalg.norm(q_next, 2)
-                error = difference/magnitude if magnitude > 0 else (0.0 if difference == 0 else np.inf)
-            else:
-                error = np.inf
-
+        error = convergence_error(q_next, q_m, correction, scale, convergence_check)
         if not np.isfinite(error):
-            print()
-            raise NonlinearConvergenceError("Newton iteration produced a non-finite error.")
-
-        print(f"\rCN | t={time:.4e} | NWT {counter}/{limit} | err={error:.3e}".ljust(76), end="", flush=True)
+            raise NonlinearConvergenceError("Nonlinear iteration produced a non-finite error.")
+        errors.append(error)
+        update_info(info, errors)
+        print(f"\rCN t={time:.3e} | NWT {counter}/{limit} | err={error:.2e} | r={info['rate']:.2g}".ljust(76), end="", flush=True)
 
         if error < eps_tol:
             return q_next
-
         q_m = q_next
 
-    print()
-    raise NonlinearConvergenceError(f"Fixed-point iteration did not converge after {limit} iterations; last error={error:.3e}.")
+    raise NonlinearConvergenceError(f"Newton iteration did not converge after {limit} iterations; last error={error:.3e}.")
+
