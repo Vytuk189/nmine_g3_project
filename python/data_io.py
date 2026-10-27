@@ -3,6 +3,51 @@
 import numpy as np
 from pathlib import Path
 
+def create_results_folder(domain, folder_name):
+    """Create a unique results folder and save the domain."""
+    data_folder = Path.cwd() / "data"
+    data_folder.mkdir(exist_ok=True)
+
+    folder = data_folder / folder_name
+    counter = 1
+
+    while folder.exists():
+        folder = data_folder / f"{folder_name}_{counter}"
+        counter += 1
+
+    folder.mkdir()
+    (folder / "snapshots").mkdir()
+
+    physical = domain["physical_ind"]
+    np.savetxt(folder / "x_centres.txt", domain["x_centres"][physical], fmt="%.18e")
+    np.savez(folder / "domain.npz", **domain)
+
+    print(f"Saving results to: {folder}")
+    return folder
+
+
+def save_snapshot(primitives, time, domain, folder, iteration):
+    """Save one complete snapshot, containing physical cells only.
+
+    A temporary file is renamed after writing, so an interrupted write
+    does not replace or damage previously completed snapshots.
+    """
+    folder = Path(folder)
+    physical = domain["physical_ind"]
+
+    values = {"time": np.array(time)}
+
+    for name, array in primitives.items():
+        values[name] = np.asarray(array)[physical]
+
+    destination = folder / "snapshots" / f"step_{iteration:012d}.npz"
+    temporary = destination.with_suffix(".tmp")
+
+    with temporary.open("wb") as file:
+        np.savez(file, **values)
+
+    temporary.replace(destination)
+
 
 def save_primitives(history, domain, folder_name):
     """Save full-grid history using a bare folder_name under ./data.
@@ -57,6 +102,38 @@ def load_primitives(folder_name):
     # A bare name refers to a folder inside the current data folder.
     if not folder.is_absolute() and folder.parent == Path("."):
         folder = Path.cwd() / "data" / folder
+        
+    # Incrementally saved runs.
+    snapshot_folder = folder / "snapshots"
+
+    if snapshot_folder.exists():
+        files = sorted(snapshot_folder.glob("step_*.npz"))
+
+        if not files:
+            raise ValueError(f"No completed snapshots found in {folder}.")
+
+        x_centres = np.loadtxt(folder / "x_centres.txt", ndmin=1)
+        history = {"times": [], "primitives": {}}
+
+        for file in files:
+            with np.load(file) as snapshot:
+                history["times"].append(float(snapshot["time"]))
+
+                for name in snapshot.files:
+                    if name == "time":
+                        continue
+
+                    if name not in history["primitives"]:
+                        history["primitives"][name] = []
+
+                    history["primitives"][name].append(snapshot[name].copy())
+
+        history["times"] = np.array(history["times"])
+
+        for name in history["primitives"]:
+            history["primitives"][name] = np.stack(history["primitives"][name])
+
+        return x_centres, history
 
     x_centres = np.loadtxt(folder / "x_centres.txt", ndmin=1)
     times = np.loadtxt(folder / "times.txt", ndmin=1)

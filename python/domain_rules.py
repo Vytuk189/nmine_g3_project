@@ -21,3 +21,12 @@ def nozzle_area(x):
 
 def linear_area(x):
     return 1.0 + 0.1*x
+
+def g3_nozzle_area(x):  
+    """Cross-sectional area for the G3 nozzle."""
+    Ain, Aout, At = 1.0, 0.6, 0.1
+    xL, xR, xt = 0.0, 10.0, 5.0
+    if x <= xt:
+        return At + (Ain - At) * ((x - xt) / (xL - xt))**2
+    else:
+        return At + (Aout - At) * ((x - xt) / (xR - xt))**2

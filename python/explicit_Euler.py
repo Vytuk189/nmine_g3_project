@@ -4,6 +4,7 @@ import numpy as np
 from conditions import apply_boundary_conditions
 from solver_functions import get_primitives, compute_residual
 from miscellaneous import conservation_check
+from data_io import save_snapshot
 
 
 def get_time_step(u, c, dx, cfl=0.5):
@@ -11,7 +12,7 @@ def get_time_step(u, c, dx, cfl=0.5):
     return cfl * np.min(dx / (np.abs(u) + c))
 
 
-def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100, reconstruction="muscl", pressure_fallback="first_order"):
+def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100, reconstruction="muscl", pressure_fallback="first_order", results_folder=None):
 
 
     # final_time >= 0, cfl > 0 and save_every is a positive integer.
@@ -31,6 +32,9 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
 
     for name in primitives:
         history["primitives"][name] = [primitives[name].copy()]
+        
+    if results_folder is not None:
+        save_snapshot(primitives, t, domain, results_folder, counter)
 
     while t < final_time:
         print(f"\rCalculating with Euler{'.' * (counter % 3 + 1):<3}", end="", flush=True)
@@ -56,6 +60,9 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
 
             for name in primitives:
                 history["primitives"][name].append(primitives[name].copy())
+                
+            if results_folder is not None:
+                save_snapshot(primitives, t, domain, results_folder, counter)
 
             min_p = np.min(primitives["p"][physical])
             max_p = np.max(primitives["p"][physical])
