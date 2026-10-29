@@ -303,7 +303,7 @@ def rusanov_flux(q_interface_left, q_interface_right):
     return flux, u_star
 
 
-def compute_residual(q, domain, reconstruction="muscl", pressure_fallback="first_order"):
+def compute_residual(q, domain, reconstruction="muscl", pressure_fallback="first_order", return_boundary_fluxes=False):
     """
     Compute dQ/dt for physical cells using source-term Option 2.
 
@@ -345,5 +345,12 @@ def compute_residual(q, domain, reconstruction="muscl", pressure_fallback="first
         # volume-fraction source, using interface velocities
         div_area_u = (area_right*u_star[i + 1] - area_left*u_star[i]) / cell_volume
         rate[4, i] += (alpha_g + k)*div_area_u
+
+    if return_boundary_fluxes:
+        # flux columns span physical faces, from inlet to outlet.
+        # Multiply by face area to obtain transport rates.
+        left_flux = area[first_face]*flux[:, 0]
+        right_flux = area[first_face + n_cells]*flux[:, -1]
+        return rate, left_flux, right_flux
 
     return rate

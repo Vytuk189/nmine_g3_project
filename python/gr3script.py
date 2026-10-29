@@ -11,17 +11,17 @@ from plotting import plot_domain
 
 # DOMAIN
 x_bounds = [0, 10]
-n_cells = 100
+n_cells = 50
 n_ghost = (1, 1)
 area_rule = g3_nozzle_area
-node_density_rule = gaussian_node_density
+node_density_rule = gaussian_node_density #gaussian_node_density or uniform_node_density
 show_domain = True
 x_throat = 5.0
 
 # RUN SETTINGS
 final_time = 1.5          # Simulation duration [s].
 back_pressure = 10e5      # Prescribed outlet pressure [Pa].
-folder_name = "g3_single_run"
+folder_name = "g3_open_testing_N50"
 
 # EXPLICIT EULER
 cfl = 0.25
@@ -50,7 +50,7 @@ np.savez(results_folder / "run_settings.npz", final_time=final_time, back_pressu
 # The solver applies boundary conditions and saves snapshots during integration.
 q_final, history = explicit_euler(q_initial, domain, final_time, bc_settings,
     cfl=cfl, save_every=save_every, reconstruction=reconstruction, pressure_fallback=pressure_fallback,
-    results_folder=results_folder)
+    results_folder=results_folder, open_problem=True)
 
 # RELOAD THE ACTUAL OUTPUT FOLDER
 cell_centres, loaded_history = load_primitives(results_folder)
@@ -126,3 +126,30 @@ plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+labels = ["Gas partial density", "Liquid partial density", "Momentum", "Energy", "Gas volume fraction"]
+
+plt.figure()
+for k, label in enumerate(labels):
+    plt.semilogy(history["times"], history["rez"][:, k], label=label)
+plt.xlabel("Time [s]")
+plt.ylabel("Rez [-]")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+transport = history["transport"]
+names = ["Gas mass", "Liquid mass", "Total energy"]
+units = ["kg", "kg", "J"]
+
+for k in range(3):
+    plt.figure()
+    plt.plot(transport["times"], transport["left"][:, k], label="Left boundary")
+    plt.plot(transport["times"], transport["right"][:, k], label="Right boundary")
+    plt.xlabel("Time [s]")
+    plt.ylabel(f"Accumulated {names[k].lower()} transport [{units[k]}]")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
