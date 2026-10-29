@@ -144,7 +144,7 @@ def load_primitives(folder_name):
     }
 
     for file in sorted(folder.glob("*.txt")):
-        if file.name in ("times.txt", "x_centres.txt"):
+        if file.name in ("times.txt", "x_centres.txt", "pressure_schedule.txt"):
             continue
 
         values = np.loadtxt(file, ndmin=2)

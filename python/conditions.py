@@ -99,6 +99,9 @@ def apply_boundary_conditions(domain, q, case, side, check=False, rtol=1e-3):
     periodic: ghosts copy successive physical cells from the opposite side.
     reflective: mirror successive physical cells and reverse momentum.
     """
+    # A dictionary allows the driver to prescribe a different pressure each stage.
+    pressure = case.get("pressure") if isinstance(case, dict) else None
+    case = case["type"] if isinstance(case, dict) else case
     physical = domain["physical_ind"]
 
     if side == "left":
@@ -127,7 +130,7 @@ def apply_boundary_conditions(domain, q, case, side, check=False, rtol=1e-3):
         else:
             # Subsonic outflow: impose pressure and copy the remaining
             # primitive variables from the adjacent physical cell.
-            p = g3_outlet_pressure()
+            p = g3_outlet_pressure() if pressure is None else pressure
             u = primitives["u"]
             t_g = primitives["t_g"]
             t_l = primitives["t_l"]

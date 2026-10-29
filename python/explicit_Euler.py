@@ -12,14 +12,19 @@ def get_time_step(u, c, dx, cfl=0.5):
     return cfl * np.min(dx / (np.abs(u) + c))
 
 
-def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100, reconstruction="muscl", pressure_fallback="first_order", results_folder=None):
+def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_every=100, reconstruction="muscl", pressure_fallback="first_order", results_folder=None, start_time=0.0, start_iteration=0, save_initial=True):
+    """Integrate to absolute final_time; continuation starts at start_time.
+
+    Pass the preceding final state and history["last_iteration"] to continue.
+    Use save_initial=False after the first stage to avoid duplicate endpoints.
+    """
 
 
     # final_time >= 0, cfl > 0 and save_every is a positive integer.
     # q_initial: (5, n_total), with at least one ghost per side.
     # reconstruction: "muscl"/"first_order"; fallback: "first_order"/"gradual".
-    t = 0.0
-    counter = 0
+    t = start_time
+    counter = start_iteration
     q_current = q_initial.copy()
     physical = domain["physical_ind"]
     q_current = apply_boundary_conditions(domain, q_current, bc_settings["left"], "left")
@@ -33,7 +38,7 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
     for name in primitives:
         history["primitives"][name] = [primitives[name].copy()]
         
-    if results_folder is not None:
+    if results_folder is not None and save_initial:
         save_snapshot(primitives, t, domain, results_folder, counter)
 
     while t < final_time:
@@ -75,6 +80,8 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
 
     for name in history["primitives"]:
         history["primitives"][name] = np.array(history["primitives"][name])
+
+    history["last_iteration"] = counter
 
     mass_error, energy_error = conservation_check(q_initial, q_current, domain)
     return q_current, history
