@@ -1,0 +1,20 @@
+Open-domain conservation balance:
+Gas mass [kg]
+  Left transport:   3.006202e-07
+  Right transport:  -1.942270e-06
+  Inventory change: 2.242890e-06
+  Balance error:    -3.813901e-13
+  Relative error:   -9.634039e-15
+Liquid mass [kg]
+  Left transport:   3.525578e-09
+  Right transport:  -2.607265e-08
+  Inventory change: 2.959823e-08
+  Balance error:    -6.375967e-16
+  Relative error:   -1.373323e-15
+Total energy [J]
+  Left transport:   8.888142e-02
+  Right transport:  -6.003811e-01
+  Inventory change: 6.892624e-01
+  Balance error:    -6.145294e-08
+  Relative error:   -7.341006e-15
+Mixture mass balance error: -3.820277e-13 kg

@@ -11,7 +11,7 @@ from plotting import plot_domain
 
 # DOMAIN
 x_bounds = [0, 10]
-n_cells = 50
+n_cells = 100
 n_ghost = (1, 1)
 area_rule = g3_nozzle_area
 node_density_rule = gaussian_node_density #gaussian_node_density or uniform_node_density
@@ -19,14 +19,15 @@ show_domain = True
 x_throat = 5.0
 
 # RUN SETTINGS
-final_time = 1.5          # Simulation duration [s].
+final_time = 2.0          # Simulation duration [s].
 back_pressure = 10e5      # Prescribed outlet pressure [Pa].
-folder_name = "g3_open_testing_N50"
+folder_name = "g3_open_testing_N100_CFL_modified_muscl_test_modified_momentum_cal"
+
 
 # EXPLICIT EULER
 cfl = 0.25
 save_every = 500
-reconstruction = "muscl"
+reconstruction = "muscl"  # "first_order" or "muscl"
 pressure_fallback = "gradual"
 
 # BUILD DOMAIN AND INITIAL STATE
@@ -52,8 +53,9 @@ q_final, history = explicit_euler(q_initial, domain, final_time, bc_settings,
     cfl=cfl, save_every=save_every, reconstruction=reconstruction, pressure_fallback=pressure_fallback,
     results_folder=results_folder, open_problem=True)
 
+
 # RELOAD THE ACTUAL OUTPUT FOLDER
-cell_centres, loaded_history = load_primitives(results_folder)
+cell_centres, loaded_history = load_primitives(folder_name)
 times = loaded_history["times"]
 primitives = loaded_history["primitives"]
 
@@ -131,25 +133,11 @@ labels = ["Gas partial density", "Liquid partial density", "Momentum", "Energy",
 
 plt.figure()
 for k, label in enumerate(labels):
-    plt.semilogy(history["times"], history["rez"][:, k], label=label)
+    plt.semilogy(loaded_history["times"], loaded_history["rez"][:, k], label=label)
 plt.xlabel("Time [s]")
-plt.ylabel("Rez [-]")
+plt.ylabel("Volume-weighted RMS change per step")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-transport = history["transport"]
-names = ["Gas mass", "Liquid mass", "Total energy"]
-units = ["kg", "kg", "J"]
-
-for k in range(3):
-    plt.figure()
-    plt.plot(transport["times"], transport["left"][:, k], label="Left boundary")
-    plt.plot(transport["times"], transport["right"][:, k], label="Right boundary")
-    plt.xlabel("Time [s]")
-    plt.ylabel(f"Accumulated {names[k].lower()} transport [{units[k]}]")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()

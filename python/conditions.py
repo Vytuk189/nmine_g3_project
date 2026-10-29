@@ -24,8 +24,8 @@ def alpha_g_rule(x):
 
 def g3_initial_u(x):
     from domain_rules import g3_nozzle_area
-    u0 = 5 # m/s
-    return g3_nozzle_area(0) * u0 / g3_nozzle_area(x)  
+    u0 = 5.0
+    return g3_nozzle_area(0) * u0 / g3_nozzle_area(x)
 
 def g3_initial_p(x):
     return 10e5
@@ -112,7 +112,15 @@ def apply_boundary_conditions(domain, q, case, side, check=False, rtol=1e-3):
         ghosts = domain["ghost_right_ind"]
         
     if case == "g3_inlet":
-        q_bc = g3_inlet_state()
+        u = 5.0  
+        x_inlet = domain["x_faces"][physical[0]]
+        p = g3_initial_p(x_inlet)
+        t_g = g3_initial_t_g(x_inlet)
+        t_l = g3_initial_t_l(x_inlet)
+        alpha_g = g3_initial_alpha_g(x_inlet)
+
+        # Recalculate momentum and energy consistently with the new velocity.
+        q_bc = primitive_to_q(p, u, t_g, t_l, alpha_g)
 
         for ghost in ghosts:
             q[:, ghost] = q_bc

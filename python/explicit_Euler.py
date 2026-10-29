@@ -82,22 +82,11 @@ def explicit_euler(q_initial, domain, final_time, bc_settings, cfl=0.5, save_eve
             rez = np.zeros(5)
 
             for k in range(5):
-                # Scale from the previous state, using physical cells only.
-                scale = np.max(np.abs(q_current[k, physical]))
+                # Change between consecutive time steps, physical cells only.
+                difference = q_next[k, physical] - q_current[k, physical]
 
-                # Compare consecutive steps, not consecutive saved snapshots.
-                change = q_next[k, physical] - q_current[k, physical]
-
-                # Volume-weighted RMS rate, with reference time fixed at 1 s.
-                rms_rate = np.sqrt(np.sum(volumes*(change/tau)**2) / total_volume)
-
-                if scale > 0:
-                    rez[k] = rms_rate / scale
-                elif rms_rate == 0:
-                    rez[k] = 0.0
-                else:
-                    # A nonzero change cannot be normalized by a zero reference.
-                    rez[k] = np.inf
+                # Volume-weighted RMS difference: no component or time scaling.
+                rez[k] = np.sqrt(np.sum(volumes*difference**2) / total_volume)
 
         if open_problem:
             # Explicit Euler uses boundary fluxes from the start of the step.

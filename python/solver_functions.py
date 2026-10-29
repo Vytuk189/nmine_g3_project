@@ -286,6 +286,10 @@ def muscl_reconstruction(q, domain, pressure_fallback="first_order"):
                 upper = theta
         q_left[:, j] = q[:, j] + lower*left_change
         q_right[:, j] = q[:, j] + lower*right_change
+    # Keep boundary ghost states unchanged by reconstruction. - FOR NOW ONLY USED FOR THE FREE VELOCITY AT THE INLET, DELETE THIS IF IT DOESNT WORK
+    for ghosts in (domain["ghost_left_ind"], domain["ghost_right_ind"]):
+        q_left[:, ghosts] = q[:, ghosts]
+        q_right[:, ghosts] = q[:, ghosts]   
     return q_left, q_right
 
 
@@ -341,7 +345,7 @@ def compute_residual(q, domain, reconstruction="muscl", pressure_fallback="first
         primitive = q_to_flow(q[:, j])
         p, alpha_g, k = primitive["p"], primitive["alpha_g"], primitive["k"]
         # momentum source
-        rate[2, i] += p*(area_right - area_left) / cell_volume
+        rate[2, i] = -(area_right*(flux[2, i + 1] - p) - area_left*(flux[2, i] - p)) / cell_volume
         # volume-fraction source, using interface velocities
         div_area_u = (area_right*u_star[i + 1] - area_left*u_star[i]) / cell_volume
         rate[4, i] += (alpha_g + k)*div_area_u
